@@ -1,0 +1,24 @@
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+Secrets.plist
+
+# macOS
+.DS_Store
+._*
+
+# Swift and Xcode build output
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Local recordings and databases
+audio/
+recordings/
+*.sqlite
+*.sqlite3
