@@ -29,6 +29,7 @@ A fly on the wall for your meetings. It listens to the microphone and to system 
 7. **Diarize twice, both times with a hosted provider.** A streaming call labels speakers live for the page. When the meeting ends, send the saved audio again and replace the labels with the tighter batch result. Keep the audio on disk only until that second call finishes.
 8. **Start with two tracks:** the microphone and one system-audio mix. Per-app audio and multiple microphones come later.
 9. **The user brings their own key.** Each person signs up with the provider and supplies their own key. We never hold one, and we never pay for their audio. For now the app reads the key from a `.env` file in the project folder. Move it to the macOS Keychain when the app ships.
+10. **Use Speechmatics as the provider.** It takes the live pass and, most likely, the batch pass too. We dropped Deepgram and AssemblyAI from the shortlist.
 
 ## Keys
 
@@ -43,18 +44,18 @@ A fly on the wall for your meetings. It listens to the microphone and to system 
 
 ## Still open
 
-- **Which hosted provider.** This is the biggest unknown now. The shortlist for the live pass is Speechmatics, AssemblyAI, and Deepgram. For the batch pass, OpenAI or DeepInfra. Check that a vendor diarizes a live stream, not just a finished file, because the page needs the live labels.
-- **Speaker limits.** Live diarization caps vary a lot. AssemblyAI allows 10, Amazon 30, Azure about 35, and Speechmatics 50. A large in-person meeting goes past the low ones. Ask each vendor what happens at the limit: does it drop labels, or merge people?
-- **One vendor or two.** One vendor doing both speech-to-text and diarization is easier to reason about. Two means two bills and two sets of timestamps to line up.
+- **Which hosted provider.** Speechmatics takes the live pass, and we dropped Deepgram and AssemblyAI from the shortlist. The batch pass is still open: Speechmatics again, OpenAI, DeepInfra, or another vendor. Check that the live vendor diarizes a live stream, not just a finished file, because the page needs the live labels.
+- **Speaker limits.** Live diarization caps vary a lot. Speechmatics allows 50. A large in-person meeting goes past the lower caps we saw elsewhere, so 50 is comfortable. Ask Speechmatics what happens at the limit: does it drop labels, or merge people?
+- **One vendor or two.** If Speechmatics covers the batch pass as well as the live pass, one vendor is easier to reason about. Two vendors means two bills and two sets of timestamps to line up.
 - **The second pass.** Re-diarizing at the end of a meeting means sending the audio again. Budget for the second bill, and plan to delete the audio after it.
 - **Echo handling** for when the user is on speakers rather than headphones.
-- **Named speakers.** OpenAI's diarize model takes a reference clip of each person, which is the closest thing to naming speakers we have found. Check whether the live vendors sell the same.
+- **Named speakers.** OpenAI's diarize model takes a reference clip of each person, which is the closest thing to naming speakers we have found. Check whether Speechmatics sells the same.
 
 ## Next step
 
-Test the providers first, then build the capture helper.
+Test Speechmatics first, then build the capture helper.
 
-1. Sign up for trials with two or three vendors. Feed each one a real meeting recording, once as a live stream and once as a batch job. Compare the speaker labels by hand. This costs an afternoon and settles the biggest unknown.
+1. Sign up for a Speechmatics trial. Feed it a real meeting recording, once as a live stream and once as a batch job. Compare the speaker labels by hand. This costs an afternoon and settles the biggest unknown.
 2. Build the Swift capture helper. It captures the microphone and system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app. Prove that piece before anything else. It is the riskiest code in the project.
 
 ## Traps
