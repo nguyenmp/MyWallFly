@@ -29,7 +29,7 @@ swift run wallfly-transcribe 60              # stop by itself after 60 seconds
 swift run wallfly-transcribe mic-only        # microphone only, one stream
 swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
 swift run wallfly-transcribe --out notes.txt # write to a file to watch with tail -f
-swift run wallfly-transcribe --final-only    # leave the drafts out
+swift run wallfly-transcribe --final-only    # do not follow the words being spoken
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
 ```
 
@@ -49,27 +49,26 @@ Press Ctrl-C to stop. It stops in about a third of a second, flushes the last wo
 
 ### Writing to a file
 
-`--out notes.txt` writes the transcript to a file instead of the terminal. Watch it with `tail -f notes.txt`.
-
-Every update goes in the moment it arrives, one line each. A draft line starts with a `…` and stands for words still being spoken:
+`--out notes.txt` keeps the transcript in a file. The file always holds it as it stands: every settled line, plus one open line for the words still being spoken.
 
 ```
-   … mic S1: Hello. This is
-   … mic S1: Hello. This is Samantha speaking
-   … mic S1: Samantha speaking. We are testing
 [   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
+   … mic S2: Let us see whether the labels come
 ```
 
-A line with a timestamp is settled. The draft above it was replaced.
+The open line, the one with the `…`, is rewritten in place on every update. So it follows the words as they change and is never half a sentence behind. Nothing is appended for it, and the file does not grow while one sentence is being spoken.
 
-Expect three things in the drafts. They repeat, and they can go backwards while the service changes its mind. The speaker label flickers between two similar voices. And a draft often carries only the tail of a sentence, because the service drops the words it has already committed.
+When the speaker pauses, that line settles: it takes its timestamp, and a new open line starts below it.
 
-`--final-only` leaves the drafts out and keeps a clean file, at the cost of waiting for each pause.
+Expect the open line to look unsettled. It goes backwards, it drops the words already committed, and its speaker label flips between two similar voices. The settled lines are the ones to trust.
 
-Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. That means this works too:
+`--final-only` writes settled lines only, and waits for each pause before anything appears.
+
+Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. The in-place update needs a real file to seek in, so write to one with `--out`. If you redirect standard output instead, lines are added as they settle:
 
 ```sh
-swift run wallfly-transcribe > notes.txt
+swift run wallfly-transcribe > notes.txt      # added lines, no in-place update
+swift run wallfly-transcribe --out notes.txt  # one open line, rewritten in place
 ```
 
 `--file` reads any format the system can decode, converts it to 16 kHz mono, and sends it at real time. It is the fastest way to prove the provider path: you get a transcript without a meeting, a microphone, or a permission prompt. To make a clip with two voices:

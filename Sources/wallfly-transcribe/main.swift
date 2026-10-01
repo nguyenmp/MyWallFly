@@ -11,7 +11,7 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe mic-only         microphone only, one stream
 //   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
 //   swift run wallfly-transcribe --out notes.txt  write to a file to watch with tail -f
-//   swift run wallfly-transcribe --final-only     leave the drafts out
+//   swift run wallfly-transcribe --final-only     do not follow the words being spoken
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
 //
@@ -138,21 +138,25 @@ if arguments.contains("--check") {
 
 // MARK: - Where the transcript goes
 
-/// Finished lines go to a file when `--out` names one, ready to watch with
-/// `tail -f`. Only finished lines are written, so the file stays a clean
-/// transcript and never shows half a sentence. The live line stays in the
-/// terminal, and the totals still print there at the end.
+/// `--out` keeps the transcript in a file, which always holds it as it stands:
+/// every settled line, plus one open line for the words still being spoken.
+/// That open line is rewritten in place on every update, so the file is never
+/// half a sentence behind.
 var transcriptFile: FileHandle?
 if let outPath = value(after: "--out", in: arguments) {
-    FileManager.default.createFile(atPath: outPath, contents: nil)
+    if !FileManager.default.fileExists(atPath: outPath) {
+        FileManager.default.createFile(atPath: outPath, contents: nil)
+    }
     guard let handle = FileHandle(forWritingAtPath: outPath) else {
         Console.err("Could not open \(outPath) for writing.\n")
         exit(1)
     }
+    // A run owns its file. An older transcript in it would only confuse.
+    try? handle.truncate(atOffset: 0)
     transcriptFile = handle
-    Console.note("transcript: \(outPath)   (watch it with: tail -f \(outPath))")
+    Console.note("transcript: \(outPath)")
     if !finalOnly {
-        Console.note("drafts are written as they arrive, one line each. --final-only leaves them out.")
+        Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
     }
 }
 
@@ -194,7 +198,7 @@ if let filePath = value(after: "--file", in: arguments) {
     let printer = SegmentPrinter(showPartials: showPartials,
                                  canRedraw: Console.canRedraw,
                                  file: transcriptFile,
-                                 writeDrafts: !finalOnly)
+                                 followDrafts: !finalOnly)
     var pipe = TranscriptionPipe(config: providerConfiguration, tracks: [.microphone])
     if verbose {
         pipe.debugLog = { Console.note("  · \($0)") }
@@ -258,7 +262,7 @@ for trackStart in start.starts {
 let printer = SegmentPrinter(showPartials: showPartials,
                              canRedraw: Console.canRedraw,
                              file: transcriptFile,
-                             writeDrafts: !finalOnly)
+                             followDrafts: !finalOnly)
 var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
 if verbose {
     pipe.debugLog = { Console.note("  · \($0)") }
@@ -305,26 +309,36 @@ do {
     exit(1)
 }
 
-/// Prints final lines as they land, and keeps one updating line for everything
-/// else: the words so far, or a sign of life.
+/// Keeps the transcript up to date: settled lines, plus one open line for the
+/// words still being spoken.
+///
+/// On a terminal the open line is redrawn at the bottom. In a file it is
+/// rewritten in place, so the file always holds the whole transcript and the
+/// words being spoken are always on the last line.
 final class SegmentPrinter: @unchecked Sendable {
     private let lock = NSLock()
     private let showPartials: Bool
     private let canRedraw: Bool
     private let file: FileHandle?
-    /// Whether the file should get a line for every draft as it arrives.
-    private let writeDrafts: Bool
+    /// Whether the open line should follow the words that are still changing.
+    private let followDrafts: Bool
+    /// True while a redrawn line sits on the bottom of the terminal.
     private var openLine = false
+    /// Where the open line starts in the file. Nil when the next write starts a
+    /// new line.
+    private var draftStart: UInt64?
+    /// How far the file has been written.
+    private var endOffset: UInt64 = 0
 
-    init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil, writeDrafts: Bool = true) {
+    init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil, followDrafts: Bool = true) {
         self.showPartials = showPartials
         self.canRedraw = canRedraw
         self.file = file
-        self.writeDrafts = writeDrafts
+        self.followDrafts = followDrafts
     }
 
-    /// Redraws the bottom line. Does nothing when the output is not a terminal,
-    /// where redrawing would fill a log with junk.
+    /// Redraws the bottom line of the terminal. Does nothing when the output is
+    /// not a terminal, where redrawing would fill a log with junk.
     func status(_ text: String) {
         guard canRedraw else { return }
         lock.lock(); defer { lock.unlock() }
@@ -338,40 +352,47 @@ final class SegmentPrinter: @unchecked Sendable {
 
         if !segment.isFinal {
             let draft = "   … \(label(for: event)): \(segment.text)"
-            // The terminal shows one draft, redrawn. A file appends each one, so
-            // `tail -f` sees the words land while they are still being spoken.
             if canRedraw { status(draft) }
-            guard file != nil else {
-                if !canRedraw && showPartials {
-                    lock.lock(); defer { lock.unlock() }
-                    clearLocked()
-                    Console.line(draft)
-                }
-                return
+            if file != nil {
+                guard followDrafts else { return }
+                lock.lock(); defer { lock.unlock() }
+                rewriteOpenLine(draft)
+            } else if !canRedraw && showPartials {
+                lock.lock(); defer { lock.unlock() }
+                clearLocked()
+                Console.line(draft)
             }
-            guard writeDrafts else { return }
-            lock.lock(); defer { lock.unlock() }
-            write(draft)
             return
         }
 
         lock.lock(); defer { lock.unlock() }
         clearLocked()
-        write(line(for: event))
-    }
-
-    /// A whole line, written straight through, so `tail -f` sees it at once.
-    private func write(_ text: String) {
-        if let file {
-            file.write(Data((text + "\n").utf8))
+        if file != nil {
+            rewriteOpenLine(line(for: event))
+            // The line is settled. The next draft opens a new line after it.
+            draftStart = nil
         } else {
-            Console.line(text)
+            Console.line(line(for: event))
         }
     }
 
     func finishLine() {
         lock.lock(); defer { lock.unlock() }
         clearLocked()
+    }
+
+    /// Puts `text` where the open line is, and cuts back whatever was there.
+    /// Writing the shorter text without cutting back would leave old words
+    /// behind it.
+    private func rewriteOpenLine(_ text: String) {
+        guard let file else { return }
+        let start = draftStart ?? endOffset
+        let bytes = Data((text + "\n").utf8)
+        try? file.seek(toOffset: start)
+        try? file.truncate(atOffset: start)
+        try? file.write(contentsOf: bytes)
+        endOffset = start + UInt64(bytes.count)
+        draftStart = start
     }
 
     private func clearLocked() {
