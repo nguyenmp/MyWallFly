@@ -60,7 +60,9 @@ The open line, the one with the `…`, is rewritten in place on every update. So
 
 When the speaker pauses, that line settles: it takes its timestamp, and a new open line starts below it.
 
-Expect the open line to look unsettled. It goes backwards, it drops the words already committed, and its speaker label flips between two similar voices. The settled lines are the ones to trust.
+The open line only grows. The service trims the words it has already committed off the front of each partial, so a partial on its own loses the start of a sentence: a long sentence arrives as "Hello. This is Samantha", then "This is Samantha speaking", then "Samantha speaking. We are". The settled words are kept and only the new ones are added, using the word times to tell them apart. Nothing is lost and nothing repeats.
+
+One thing does look unsettled: the speaker label can flip between two similar voices while a sentence is still being decided. The settled lines are the ones to trust.
 
 `--final-only` writes settled lines only, and waits for each pause before anything appears.
 

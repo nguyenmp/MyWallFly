@@ -209,6 +209,36 @@ public struct TurnAccumulator {
         return []
     }
 
+    /// Everything settled so far, joined the way a line reads.
+    public var settledText: String {
+        TranscriptSegmenter.segments(from: words, isFinal: false).map(\.text).joined(separator: " ")
+    }
+
+    /// The open line: the settled words, plus the parts of a partial that are
+    /// not already in them.
+    ///
+    /// A partial on its own loses the start of the sentence. The service trims
+    /// the words it has already committed off the front of every partial, so a
+    /// long sentence arrives as a sliding window: "Hello. This is Samantha",
+    /// then "This is Samantha speaking", then "Samantha speaking. We are". The
+    /// word times say where the settled words end and the new ones begin.
+    public func openLine(with partial: [TranscriptWord]) -> TranscriptSegment? {
+        let settledEnd = words.map(\.end).max() ?? 0
+        let fresh = partial.filter { $0.start >= settledEnd - 0.02 }
+        let freshParts = TranscriptSegmenter.segments(from: fresh, isFinal: false)
+        let freshText = freshParts.map(\.text).joined(separator: " ")
+
+        let settled = settledText
+        let text = freshText.isEmpty ? settled
+            : (settled.isEmpty ? freshText : settled + " " + freshText)
+        guard !text.isEmpty else { return nil }
+
+        let start = words.first?.start ?? freshParts.first?.start ?? 0
+        let end = max(freshParts.last?.end ?? 0, settledEnd)
+        let speaker = words.first(where: { !$0.isPunctuation })?.speaker ?? freshParts.first?.speaker
+        return TranscriptSegment(speaker: speaker, start: start, end: end, text: text, isFinal: false)
+    }
+
     /// Closes the current line. Returns nil when there is nothing to close.
     public mutating func flush() -> TranscriptSegment? {
         guard !words.isEmpty else { return nil }

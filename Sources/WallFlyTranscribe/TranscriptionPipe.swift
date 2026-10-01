@@ -84,9 +84,9 @@ public struct TranscriptionPipe: Sendable {
                             case .endOfUtterance:
                                 if let segment = turn.flush() { emit(segment) }
                             case .partial(let words):
-                                for segment in TranscriptSegmenter.segments(from: words, isFinal: false) {
-                                    emit(segment)
-                                }
+                                // The open line carries the settled words too,
+                                // or the start of a long sentence would vanish.
+                                if let segment = turn.openLine(with: words) { emit(segment) }
                             default:
                                 break
                             }

@@ -276,6 +276,39 @@ struct PipeMappingTests {
         #expect(turn.flush()?.text == "hi.")
     }
 
+    @Test("the open line keeps the settled words a partial dropped")
+    func openLineKeepsSettledWords() {
+        var turn = TurnAccumulator()
+        _ = turn.add([
+            TranscriptWord(content: "Hello.", start: 0, end: 0.5, speaker: "S1", isPunctuation: false),
+            TranscriptWord(content: "This", start: 0.6, end: 0.8, speaker: "S1", isPunctuation: false),
+        ])
+        // The service has committed those two words, so the partial carries the
+        // tail and repeats part of what is already settled.
+        let open = turn.openLine(with: [
+            TranscriptWord(content: "This", start: 0.6, end: 0.8, speaker: "S1", isPunctuation: false),
+            TranscriptWord(content: "is", start: 0.9, end: 1.0, speaker: "S1", isPunctuation: false),
+            TranscriptWord(content: "Samantha", start: 1.1, end: 1.6, speaker: "S1", isPunctuation: false),
+        ])
+        #expect(open?.text == "Hello. This is Samantha")
+        #expect(open?.start == 0)
+        #expect(open?.isFinal == false)
+    }
+
+    @Test("an open line with nothing settled is just the partial")
+    func openLineWithoutSettledWords() {
+        let turn = TurnAccumulator()
+        let open = turn.openLine(with: [
+            TranscriptWord(content: "Hi", start: 0, end: 1, speaker: "S1", isPunctuation: false)
+        ])
+        #expect(open?.text == "Hi")
+    }
+
+    @Test("an open line with nothing at all gives nothing")
+    func openLineWithNothing() {
+        #expect(TurnAccumulator().openLine(with: []) == nil)
+    }
+
     @Test("flushing an empty turn gives nothing")
     func emptyTurnFlushesNothing() {
         var turn = TurnAccumulator()
