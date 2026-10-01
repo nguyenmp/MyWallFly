@@ -10,7 +10,8 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe 60               stop by itself after 60 seconds
 //   swift run wallfly-transcribe mic-only         microphone only, one stream
 //   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
-//   swift run wallfly-transcribe --out notes.txt  write lines to a file to watch with tail -f
+//   swift run wallfly-transcribe --out notes.txt  write to a file to watch with tail -f
+//   swift run wallfly-transcribe --final-only     leave the drafts out
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
 //
@@ -27,6 +28,8 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init)
 let microphoneOnly = arguments.contains("mic-only")
 let showPartials = arguments.contains("--partials")
+/// Drafts out. Useful for a file you want to keep as a clean transcript.
+let finalOnly = arguments.contains("--final-only")
 let verbose = arguments.contains("--verbose")
 
 func value(after flag: String, in arguments: [String]) -> String? {
@@ -148,6 +151,9 @@ if let outPath = value(after: "--out", in: arguments) {
     }
     transcriptFile = handle
     Console.note("transcript: \(outPath)   (watch it with: tail -f \(outPath))")
+    if !finalOnly {
+        Console.note("drafts are written as they arrive, one line each. --final-only leaves them out.")
+    }
 }
 
 // MARK: - Replay a recording
@@ -187,7 +193,8 @@ if let filePath = value(after: "--file", in: arguments) {
 
     let printer = SegmentPrinter(showPartials: showPartials,
                                  canRedraw: Console.canRedraw,
-                                 file: transcriptFile)
+                                 file: transcriptFile,
+                                 writeDrafts: !finalOnly)
     var pipe = TranscriptionPipe(config: providerConfiguration, tracks: [.microphone])
     if verbose {
         pipe.debugLog = { Console.note("  · \($0)") }
@@ -250,7 +257,8 @@ for trackStart in start.starts {
 
 let printer = SegmentPrinter(showPartials: showPartials,
                              canRedraw: Console.canRedraw,
-                             file: transcriptFile)
+                             file: transcriptFile,
+                             writeDrafts: !finalOnly)
 var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
 if verbose {
     pipe.debugLog = { Console.note("  · \($0)") }
@@ -304,12 +312,15 @@ final class SegmentPrinter: @unchecked Sendable {
     private let showPartials: Bool
     private let canRedraw: Bool
     private let file: FileHandle?
+    /// Whether the file should get a line for every draft as it arrives.
+    private let writeDrafts: Bool
     private var openLine = false
 
-    init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil) {
+    init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil, writeDrafts: Bool = true) {
         self.showPartials = showPartials
         self.canRedraw = canRedraw
         self.file = file
+        self.writeDrafts = writeDrafts
     }
 
     /// Redraws the bottom line. Does nothing when the output is not a terminal,
@@ -326,13 +337,21 @@ final class SegmentPrinter: @unchecked Sendable {
         let segment = event.segment
 
         if !segment.isFinal {
-            if canRedraw {
-                status("   … \(label(for: event)): \(segment.text)")
-            } else if showPartials {
-                lock.lock(); defer { lock.unlock() }
-                clearLocked()
-                Console.line("   … \(label(for: event)): \(segment.text)")
+            let draft = "   … \(label(for: event)): \(segment.text)"
+            // The terminal shows one draft, redrawn. A file appends each one, so
+            // `tail -f` sees the words land while they are still being spoken.
+            if canRedraw { status(draft) }
+            guard file != nil else {
+                if !canRedraw && showPartials {
+                    lock.lock(); defer { lock.unlock() }
+                    clearLocked()
+                    Console.line(draft)
+                }
+                return
             }
+            guard writeDrafts else { return }
+            lock.lock(); defer { lock.unlock() }
+            write(draft)
             return
         }
 

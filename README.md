@@ -28,7 +28,8 @@ swift run wallfly-transcribe                 # listen until you press Ctrl-C
 swift run wallfly-transcribe 60              # stop by itself after 60 seconds
 swift run wallfly-transcribe mic-only        # microphone only, one stream
 swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
-swift run wallfly-transcribe --out notes.txt # write lines to a file to watch with tail -f
+swift run wallfly-transcribe --out notes.txt # write to a file to watch with tail -f
+swift run wallfly-transcribe --final-only    # leave the drafts out
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
 ```
 
@@ -48,9 +49,22 @@ Press Ctrl-C to stop. It stops in about a third of a second, flushes the last wo
 
 ### Writing to a file
 
-`--out notes.txt` writes finished lines to a file instead of the terminal. Watch it with `tail -f notes.txt`.
+`--out notes.txt` writes the transcript to a file instead of the terminal. Watch it with `tail -f notes.txt`.
 
-The file gets whole lines only, so it never shows half a sentence, and it fills while the meeting runs rather than at the end. A line lands when a speaker pauses; while someone is still talking, the words in progress sit on the terminal line. Expect a gap of a few seconds to a minute between lines, depending on how often people stop talking.
+Every update goes in the moment it arrives, one line each. A draft line starts with a `…` and stands for words still being spoken:
+
+```
+   … mic S1: Hello. This is
+   … mic S1: Hello. This is Samantha speaking
+   … mic S1: Samantha speaking. We are testing
+[   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
+```
+
+A line with a timestamp is settled. The draft above it was replaced.
+
+Expect three things in the drafts. They repeat, and they can go backwards while the service changes its mind. The speaker label flickers between two similar voices. And a draft often carries only the tail of a sentence, because the service drops the words it has already committed.
+
+`--final-only` leaves the drafts out and keeps a clean file, at the cost of waiting for each pause.
 
 Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. That means this works too:
 
