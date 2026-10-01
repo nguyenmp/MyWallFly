@@ -29,7 +29,30 @@ A fly on the wall for your meetings. It listens to the microphone and to system 
 7. **Diarize twice, both times with a hosted provider.** A streaming call labels speakers live for the page. When the meeting ends, send the saved audio again and replace the labels with the tighter batch result. Keep the audio on disk only until that second call finishes.
 8. **Start with two tracks:** the microphone and one system-audio mix. Per-app audio and multiple microphones come later.
 9. **The user brings their own key.** Each person signs up with the provider and supplies their own key. We never hold one, and we never pay for their audio. For now the app reads the key from a `.env` file in the project folder. Move it to the macOS Keychain when the app ships.
-10. **Use Speechmatics as the provider.** It takes the live pass and, most likely, the batch pass too. We dropped Deepgram and AssemblyAI from the shortlist.
+10. **Use Speechmatics as the provider.** It takes the live pass and the batch pass. We tested both on a real meeting and dropped Deepgram and AssemblyAI from the shortlist.
+11. **Keep the provider's transcript as it comes. Never edit it.** Show the raw text plus the user's changes. The second pass at the end of a meeting replaces the speaker labels, and it would erase any change written into the raw text.
+12. **Point changes at a time, not at a speaker name.** The live pass and the batch pass give the same voice different names, so a change marks a stretch of time on a track.
+13. **Let people name speakers.** S1 becomes Mark once, and the name stays for the rest of the meeting.
+
+## Edits
+
+People need to fix the transcript, because diarization is not perfect. Three kinds of fix:
+
+- Change who spoke in a stretch of time.
+- Merge two speakers into one.
+- Fix the words.
+
+Two tables hold it all:
+
+```sql
+-- what the provider said, kept as it came
+transcript_base (meeting_id, track, start_ms, end_ms, text, speaker_label)
+
+-- what the user changed, applied on top
+correction (meeting_id, kind, start_ms, end_ms, value, made_at)
+```
+
+`kind` is `speaker`, `merge`, or `words`. Each change gets a revision number so it can be undone. Warn the user that speaker names change when the second pass lands.
 
 ## Keys
 
@@ -44,19 +67,19 @@ A fly on the wall for your meetings. It listens to the microphone and to system 
 
 ## Still open
 
-- **Which hosted provider.** Speechmatics takes the live pass, and we dropped Deepgram and AssemblyAI from the shortlist. The batch pass is still open: Speechmatics again, OpenAI, DeepInfra, or another vendor. Check that the live vendor diarizes a live stream, not just a finished file, because the page needs the live labels.
+- **Stream limits.** The Speechmatics trial allows 2 streams at once. Two tracks sent as two streams would use the whole quota for one user. Decide whether to mix the tracks or pay for more.
 - **Speaker limits.** Live diarization caps vary a lot. Speechmatics allows 50. A large in-person meeting goes past the lower caps we saw elsewhere, so 50 is comfortable. Ask Speechmatics what happens at the limit: does it drop labels, or merge people?
-- **One vendor or two.** If Speechmatics covers the batch pass as well as the live pass, one vendor is easier to reason about. Two vendors means two bills and two sets of timestamps to line up.
+- **One vendor or two.** Speechmatics covers both passes, so one vendor is easier to reason about. Two vendors means two bills and two sets of timestamps to line up.
 - **The second pass.** Re-diarizing at the end of a meeting means sending the audio again. Budget for the second bill, and plan to delete the audio after it.
 - **Echo handling** for when the user is on speakers rather than headphones.
 - **Named speakers.** OpenAI's diarize model takes a reference clip of each person, which is the closest thing to naming speakers we have found. Check whether Speechmatics sells the same.
 
 ## Next step
 
-Test Speechmatics first, then build the capture helper.
+Step 1 is done. Both passes work on a real meeting, so the capture helper is next.
 
-1. Sign up for a Speechmatics trial. Feed it a real meeting recording, once as a live stream and once as a batch job. Compare the speaker labels by hand. This costs an afternoon and settles the biggest unknown.
-2. Build the Swift capture helper. It captures the microphone and system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app. Prove that piece before anything else. It is the riskiest code in the project.
+1. Build the Swift capture helper. It captures the microphone and the system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app with the start offset of each track. Prove this piece first. It is the riskiest code in the project.
+2. Two quick checks, before or while you build: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
 
 ## Traps
 
