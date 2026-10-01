@@ -44,6 +44,12 @@ public struct TrackStart: Sendable {
     public let hostTime: Double
     /// Seconds after the earliest track. Use this to line the tracks up.
     public let offset: Double
+
+    public init(track: AudioTrack, hostTime: Double, offset: Double) {
+        self.track = track
+        self.hostTime = hostTime
+        self.offset = offset
+    }
 }
 
 /// What `AudioCapture.start()` returns once both tracks are alive.
@@ -51,6 +57,11 @@ public struct CaptureStart: Sendable {
     /// Host clock seconds of the earliest track. Meeting time starts here.
     public let base: Double
     public let starts: [TrackStart]
+
+    public init(base: Double, starts: [TrackStart]) {
+        self.base = base
+        self.starts = starts
+    }
 
     public func start(of track: AudioTrack) -> TrackStart? {
         starts.first { $0.track == track }

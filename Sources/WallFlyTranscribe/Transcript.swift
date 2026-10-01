@@ -49,6 +49,8 @@ public enum SpeechmaticsEvent: Sendable {
     /// A settled stretch of words. Append it.
     case final([TranscriptWord])
     case endOfTranscript
+    /// The service heard a pause. The current speaker's turn is over.
+    case endOfUtterance
     case info(String)
     case warning(String)
     case failure(String)
@@ -89,6 +91,8 @@ public enum TranscriptParser {
             return .final(words(from: root["results"]))
         case "EndOfTranscript":
             return .endOfTranscript
+        case "EndOfUtterance":
+            return .endOfUtterance
         case "Info":
             return .info(reason(from: root))
         case "Warning":
@@ -177,5 +181,49 @@ public enum TranscriptSegmenter {
         }
         flush()
         return segments
+    }
+}
+
+/// Collects final words into one line per speaker turn.
+///
+/// The service commits a final every second or two, so one sentence arrives as
+/// several finals. A transcript wants one line per turn, not per fragment. Two
+/// things end a turn: the service says the speaker paused (`EndOfUtterance`), or
+/// a different speaker starts talking.
+public struct TurnAccumulator {
+    private var words: [TranscriptWord] = []
+
+    public init() {}
+
+    /// Adds a final batch. Returns a finished line when the speaker changed
+    /// part way through the batch.
+    public mutating func add(_ batch: [TranscriptWord]) -> [TranscriptSegment] {
+        if let current = speaker,
+           let incoming = batch.first(where: { !$0.isPunctuation })?.speaker,
+           current != incoming {
+            let finished = flush()
+            words.append(contentsOf: batch)
+            return finished.map { [$0] } ?? []
+        }
+        words.append(contentsOf: batch)
+        return []
+    }
+
+    /// Closes the current line. Returns nil when there is nothing to close.
+    public mutating func flush() -> TranscriptSegment? {
+        guard !words.isEmpty else { return nil }
+        let pending = words
+        words = []
+        let parts = TranscriptSegmenter.segments(from: pending, isFinal: true)
+        guard let first = parts.first, let last = parts.last else { return nil }
+        return TranscriptSegment(speaker: first.speaker,
+                                 start: first.start,
+                                 end: last.end,
+                                 text: parts.map(\.text).joined(separator: " "),
+                                 isFinal: true)
+    }
+
+    private var speaker: String? {
+        words.first(where: { !$0.isPunctuation })?.speaker
     }
 }

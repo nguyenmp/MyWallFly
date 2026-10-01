@@ -16,6 +16,7 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init) ?? 60
 let microphoneOnly = arguments.contains("mic-only")
 let showPartials = arguments.contains("--partials")
+let verbose = arguments.contains("--verbose")
 
 func value(after flag: String, in arguments: [String]) -> String? {
     guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
@@ -85,6 +86,61 @@ if arguments.contains("--check") {
     exit(0)
 }
 
+// Replay a recording through the provider. No microphone, no permissions.
+if let filePath = value(after: "--file", in: arguments) {
+    let url = URL(fileURLWithPath: filePath)
+    let frames: [AudioFrame]
+    do {
+        frames = try AudioFileSource.frames(from: url)
+    } catch {
+        FileHandle.standardError.write(Data("Could not read \(filePath): \(error)\n".utf8))
+        exit(1)
+    }
+    guard !frames.isEmpty else {
+        FileHandle.standardError.write(Data("\(filePath) holds no audio.\n".utf8))
+        exit(1)
+    }
+
+    let seconds = Double(frames.count) * AudioFileSource.chunkSeconds
+    print("Replaying \(filePath) — \(String(format: "%.1f", seconds)) s through \(region.rawValue)")
+
+    // Feed the frames at real time. The service expects a live pace.
+    let stream = AsyncStream<AudioFrame> { continuation in
+        Task {
+            let began = Date()
+            for (index, frame) in frames.enumerated() {
+                let due = Double(index) * AudioFileSource.chunkSeconds
+                let elapsed = Date().timeIntervalSince(began)
+                if due > elapsed {
+                    try? await Task.sleep(nanoseconds: UInt64((due - elapsed) * 1_000_000_000))
+                }
+                continuation.yield(frame)
+            }
+            continuation.finish()
+        }
+    }
+
+    let printer = SegmentPrinter(showPartials: showPartials)
+    var pipe = TranscriptionPipe(config: providerConfiguration, tracks: [.microphone])
+    if verbose {
+        pipe.debugLog = { print("  · \($0)") }
+    }
+    do {
+        let report = try await pipe.run(captureStart: AudioFileSource.captureStart(),
+                                        frames: stream) { event in
+            printer.show(event)
+        }
+        printer.finishLine()
+        print("")
+        print("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+    } catch {
+        printer.finishLine()
+        FileHandle.standardError.write(Data("Transcription failed: \(error)\n".utf8))
+        exit(1)
+    }
+    exit(0)
+}
+
 print("MyWallFly → Speechmatics — running for \(runSeconds) s")
 print("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
 print("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
@@ -121,7 +177,10 @@ for trackStart in start.starts {
 /// terminal does not scroll while someone is still talking.
 let printer = SegmentPrinter(showPartials: showPartials)
 
-let pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
+var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
+if verbose {
+    pipe.debugLog = { print("  · \($0)") }
+}
 let runner = Task {
     try await pipe.run(captureStart: start, frames: capture.frames) { event in
         printer.show(event)

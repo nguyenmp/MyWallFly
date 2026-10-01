@@ -20,7 +20,7 @@ struct SpeechmaticsConfigTests {
     func startMessageShape() throws {
         let config = SpeechmaticsConfig(apiKey: "k", language: "en", maxSpeakers: 6, maxDelay: 1.5)
         let root = try #require(
-            try JSONSerialization.jsonObject(with: config.startMessage()) as? [String: Any]
+            try JSONSerialization.jsonObject(with: Data(config.startMessage().utf8)) as? [String: Any]
         )
 
         #expect(root["message"] as? String == "StartRecognition")
@@ -44,7 +44,18 @@ struct SpeechmaticsConfigTests {
     @Test("never puts the key in the start message")
     func startMessageHidesKey() {
         let config = SpeechmaticsConfig(apiKey: "super-secret-key")
-        let text = String(decoding: config.startMessage(), as: UTF8.self)
-        #expect(!text.contains("super-secret-key"))
+        #expect(!config.startMessage().contains("super-secret-key"))
+    }
+
+    @Test("the start message is text, not bytes")
+    func startMessageIsText() throws {
+        // Speechmatics reads text frames as control messages and binary frames
+        // as audio. Sending this as bytes made the service treat the start
+        // message itself as audio and refuse the stream. This test pins the
+        // shape: the API returns a String, so it can only be sent as text.
+        let config = SpeechmaticsConfig(apiKey: "k")
+        let message: String = config.startMessage()
+        #expect(!message.isEmpty)
+        #expect(try JSONSerialization.jsonObject(with: Data(message.utf8)) is [String: Any])
     }
 }

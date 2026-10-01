@@ -120,6 +120,15 @@ struct TranscriptParserTests {
         #expect(text == "hello")
     }
 
+    @Test("a pause is its own event")
+    func endOfUtterance() throws {
+        let event = try parse(#"{"message": "EndOfUtterance", "metadata": {"start_time": 3.0, "end_time": 3.0}}"#)
+        guard case .endOfUtterance = event else {
+            Issue.record("expected the end of an utterance, got \(event)")
+            return
+        }
+    }
+
     @Test("the end of the transcript is its own event")
     func endOfTranscript() throws {
         let event = try parse(#"{"message": "EndOfTranscript"}"#)
@@ -228,13 +237,57 @@ struct PipeMappingTests {
         #expect(data.allSatisfy { $0 == 0 })
     }
 
-    @Test("only transcript events become lines")
-    func onlyTranscriptEventsBecomeSegments() {
-        let words = [TranscriptWord(content: "hi", start: 0, end: 1, speaker: "S1", isPunctuation: false)]
-        #expect(TranscriptionPipe.segments(from: .final(words)).count == 1)
-        #expect(TranscriptionPipe.segments(from: .partial(words)).count == 1)
-        #expect(TranscriptionPipe.segments(from: .ignored("AudioAdded")).isEmpty)
-        #expect(TranscriptionPipe.segments(from: .info("hello")).isEmpty)
-        #expect(TranscriptionPipe.segments(from: .endOfTranscript).isEmpty)
+    @Test("finals gather into one line until the turn ends")
+    func finalsGatherIntoOneLine() {
+        var turn = TurnAccumulator()
+        let hello = [TranscriptWord(content: "hello", start: 0, end: 0.4, speaker: "S1", isPunctuation: false)]
+        let there = [TranscriptWord(content: "there", start: 0.5, end: 0.9, speaker: "S1", isPunctuation: false)]
+
+        // Two finals from one speaker stay open. Nothing is emitted yet.
+        #expect(turn.add(hello).isEmpty)
+        #expect(turn.add(there).isEmpty)
+
+        // The pause ends the turn, and the whole sentence comes out at once.
+        let line = turn.flush()
+        #expect(line?.text == "hello there")
+        #expect(line?.speaker == "S1")
+        #expect(line?.start == 0)
+        #expect(line?.end == 0.9)
+        #expect(line?.isFinal == true)
+    }
+
+    @Test("a new speaker closes the line before it")
+    func newSpeakerClosesTheLine() {
+        var turn = TurnAccumulator()
+        _ = turn.add([TranscriptWord(content: "yes", start: 0, end: 1, speaker: "S1", isPunctuation: false)])
+        let finished = turn.add([TranscriptWord(content: "no", start: 1, end: 2, speaker: "S2", isPunctuation: false)])
+
+        #expect(finished.map(\.speaker) == ["S1"])
+        #expect(finished.first?.text == "yes")
+        #expect(turn.flush()?.text == "no")
+    }
+
+    @Test("punctuation does not count as a speaker change")
+    func punctuationKeepsTheTurnOpen() {
+        var turn = TurnAccumulator()
+        _ = turn.add([TranscriptWord(content: "hi", start: 0, end: 1, speaker: "S1", isPunctuation: false)])
+        let finished = turn.add([TranscriptWord(content: ".", start: 1, end: 1, speaker: nil, isPunctuation: true)])
+        #expect(finished.isEmpty)
+        #expect(turn.flush()?.text == "hi.")
+    }
+
+    @Test("flushing an empty turn gives nothing")
+    func emptyTurnFlushesNothing() {
+        var turn = TurnAccumulator()
+        #expect(turn.flush() == nil)
+    }
+
+    @Test("the end message carries the last audio sequence number")
+    func endOfStreamCarriesSeqNo() throws {
+        let root = try #require(
+            try JSONSerialization.jsonObject(with: Data(EndOfStream.text(lastSeqNo: 7).utf8)) as? [String: Any]
+        )
+        #expect(root["message"] as? String == "EndOfStream")
+        #expect(root["last_seq_no"] as? Int == 7)
     }
 }

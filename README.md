@@ -2,7 +2,7 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: capture works, and audio now reaches Speechmatics. Nothing is stored or shown in a page yet.** Everything below is a decision, a reason, or an open question.
+**Status: capture works, and audio comes back from Speechmatics as a labelled transcript. Nothing is stored or shown in a page yet.** Everything below is a decision, a reason, or an open question.
 
 ## Try it now
 
@@ -27,6 +27,17 @@ swift run wallfly-transcribe --check         # open a stream and stop: tests the
 swift run wallfly-transcribe 60              # both tracks, 60 seconds
 swift run wallfly-transcribe 60 mic-only     # microphone only, one stream
 swift run wallfly-transcribe 60 --partials   # also show words as they land
+swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
+swift run wallfly-transcribe 60 --verbose    # also log every message from the service
+```
+
+`--file` reads any format the system can decode, converts it to 16 kHz mono, and sends it at real time. It is the fastest way to prove the provider path: you get a transcript without a meeting, a microphone, or a permission prompt. To make a clip with two voices:
+
+```sh
+say -v Samantha -o /tmp/a.aiff "Hello, this is Samantha speaking."
+say -v Daniel -o /tmp/b.aiff "And this is Daniel."
+ffmpeg -y -i /tmp/a.aiff -i /tmp/b.aiff -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/two.wav
+swift run wallfly-transcribe --file /tmp/two.wav
 ```
 
 The key is your own. The app never holds one and never pays for your audio. Never paste a key into a chat, an issue, or a log: treat any key that has been pasted as public and rotate it.
@@ -126,11 +137,17 @@ What the spike and the helper found on real hardware:
 
 The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one real-time stream per track, sends the audio, and turns the replies into transcript lines with speaker labels. It lines the two streams up on the meeting clock by sending silence at the front of whichever track began later. The `wallfly-transcribe` command runs the whole thing.
 
-What is proven, and what is not:
+What is proven:
 
-- The start message and the message parser are checked against Speechmatics' own message shapes. 31 tests pass with no key and no network.
-- A bad key comes back as "Not Authorized" in about a second, not as a hang. TLS, the socket, and the error path all work.
-- Nothing has run against a real meeting yet. That needs a real key, plus a person to approve the microphone and Screen Recording.
+- 37 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, and the rules that join words into lines.
+- A bad key comes back as "Not Authorized" in about a second, not as a hang.
+- Two voices replayed through the provider came back as two lines, labelled S1 and S2, with the words right.
+- A live twelve second run on both tracks reached the provider and ended cleanly: 1841 buffers, none dropped.
+
+What is not:
+
+- No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
+- The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
 - Nothing is stored and no page shows the transcript. The live speaker labels are not yet replaced by the end-of-meeting batch pass; that pass is not written.
 
 ## Next step
@@ -155,6 +172,9 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **Sending audio to a provider is a bigger deal than storing it yourself.** The recording leaves the machine, so the consent question is sharper. Depending on where your users are, recording other people may require all-party consent.
 - **Speakers cause echo.** System audio leaks into the microphone, and the same words show up twice.
 - **Far-field audio is the hardest case.** Room echo and people talking over each other hurt diarization most. Published accuracy numbers will not match your room.
+- **Speechmatics reads text frames as control messages and binary frames as audio.** Send the start message as bytes and the service answers "Unable to process the audio binary message, the recognition session handshake was not completed yet". It looks like a key or permission problem and it is neither. `startMessage()` returns a `String` now, so the mistake does not compile.
+- **The end message must name the last audio chunk.** Bare `{"message":"EndOfStream"}` is rejected by the service schema, and the service then drops the words it was still holding: every meeting loses its last few seconds. The reply is easy to miss, because the words simply never arrive. Send `last_seq_no`, the count of audio frames sent, which the service echoes in every `AudioAdded`.
+- **A final transcript message is not a whole line.** The service commits a final every second or two, so one sentence arrives as several of them. Joining them at the `EndOfUtterance` message, and when the speaker changes, gives one line per turn. Without that the transcript is a column of two word fragments.
 - **A Command Line Tools install can fail to load the swift-testing macros.** With no full Xcode, `swift test` sometimes stopped with "plugin for module 'TestingMacros' not found". That is a toolchain problem, not a test failure, and it hit about a third of runs. `Package.swift` now points the compiler straight at the plugin directory, which fixed it. If it comes back, check that the directory still exists.
 
 ## Considered, not using

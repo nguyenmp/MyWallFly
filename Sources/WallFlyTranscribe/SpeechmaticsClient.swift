@@ -18,6 +18,9 @@ public actor SpeechmaticsClient {
     private let continuation: AsyncStream<SpeechmaticsEvent>.Continuation
 
     private var reader: Task<Void, Never>?
+    /// How many audio frames have gone out. The end message must name the last
+    /// one, or the service rejects it and drops the words it still holds.
+    private var audioMessagesSent = 0
     private var startWaiters: [CheckedContinuation<Void, Error>] = []
     private var startResult: Result<Void, Error>?
     private var closed = false
@@ -41,7 +44,9 @@ public actor SpeechmaticsClient {
         socket.resume()
         reader = Task { [weak self] in await self?.readLoop() }
 
-        try await socket.send(.data(config.startMessage()))
+        // Text frame. Speechmatics reads text as control messages and bytes as
+        // audio, so this one must not be a `.data` send.
+        try await socket.send(.string(config.startMessage()))
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { try await self.awaitStart() }
@@ -55,15 +60,17 @@ public actor SpeechmaticsClient {
     }
 
     /// Hands raw 16 kHz mono 16-bit little-endian PCM to the service.
+    /// Binary frame: this is the audio, not a control message.
     public func send(_ pcm: Data) async throws {
         guard !closed else { return }
         try await socket.send(.data(pcm))
+        audioMessagesSent += 1
     }
 
     /// Says there is no more audio and asks the service to wrap up.
     public func finish() async {
         guard !closed else { return }
-        try? await socket.send(.string(#"{"message":"EndOfStream"}"#))
+        try? await socket.send(.string(EndOfStream.text(lastSeqNo: audioMessagesSent)))
     }
 
     /// Closes the socket and ends the event stream. Safe to call twice.

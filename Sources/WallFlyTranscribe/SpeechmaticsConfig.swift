@@ -46,7 +46,12 @@ public struct SpeechmaticsConfig: Sendable {
 
     /// The first message on the socket. It names the audio format and says how
     /// to transcribe.
-    public func startMessage() -> Data {
+    ///
+    /// Returns text, not bytes. Speechmatics reads text frames as control
+    /// messages and binary frames as audio. Send this as bytes and the service
+    /// treats the start message itself as the first chunk of audio, then
+    /// refuses the stream for starting the handshake with audio.
+    public func startMessage() -> String {
         let message = StartRecognition(
             audioFormat: .init(sampleRate: Int(CaptureFormat.sampleRate)),
             transcriptionConfig: .init(
@@ -59,7 +64,7 @@ public struct SpeechmaticsConfig: Sendable {
         let encoder = JSONEncoder()
         // Stable key order keeps the message easy to read in a log.
         encoder.outputFormatting = [.sortedKeys]
-        return try! encoder.encode(message)
+        return String(decoding: try! encoder.encode(message), as: UTF8.self)
     }
 }
 
@@ -115,5 +120,27 @@ struct StartRecognition: Encodable {
             case maxSpeakers = "max_speakers"
             case preferCurrentSpeaker = "prefer_current_speaker"
         }
+    }
+}
+
+/// The message that says no more audio is coming.
+///
+/// It must carry the sequence number of the last audio chunk. The service
+/// replies to each chunk with that number, and it rejects the message without
+/// it, then never commits the words it still holds.
+struct EndOfStream: Encodable {
+    let message = "EndOfStream"
+    let lastSeqNo: Int
+
+    enum CodingKeys: String, CodingKey {
+        case message
+        case lastSeqNo = "last_seq_no"
+    }
+
+    /// The wire text for the end message. Text frame, like the start message.
+    static func text(lastSeqNo: Int) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try! encoder.encode(EndOfStream(lastSeqNo: lastSeqNo)), as: UTF8.self)
     }
 }

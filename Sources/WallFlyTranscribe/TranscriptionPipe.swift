@@ -33,6 +33,9 @@ public struct TranscriptionPipe: Sendable {
     public let config: SpeechmaticsConfig
     public let tracks: [AudioTrack]
 
+    /// Every event from the service, for chasing a problem. Leave it nil in the app.
+    public var debugLog: (@Sendable (String) -> Void)?
+
     public init(config: SpeechmaticsConfig, tracks: [AudioTrack] = AudioTrack.allCases) {
         self.config = config
         self.tracks = tracks
@@ -68,12 +71,29 @@ public struct TranscriptionPipe: Sendable {
             await withTaskGroup(of: Void.self) { group in
                 for (track, client) in clients {
                     group.addTask {
+                        var turn = TurnAccumulator()
+                        func emit(_ segment: TranscriptSegment) {
+                            report.countSegment()
+                            onEvent(TranscriptionEvent(track: track, segment: segment))
+                        }
                         for await event in client.events {
-                            for segment in Self.segments(from: event) {
-                                report.countSegment()
-                                onEvent(TranscriptionEvent(track: track, segment: segment))
+                            debugLog?("\(track.rawValue): \(Self.name(of: event))")
+                            switch event {
+                            case .final(let words):
+                                for segment in turn.add(words) { emit(segment) }
+                            case .endOfUtterance:
+                                if let segment = turn.flush() { emit(segment) }
+                            case .partial(let words):
+                                for segment in TranscriptSegmenter.segments(from: words, isFinal: false) {
+                                    emit(segment)
+                                }
+                            default:
+                                break
                             }
                         }
+                        // The stream ended. Anything still open is a real line.
+                        if let segment = turn.flush() { emit(segment) }
+                        debugLog?("\(track.rawValue): event stream closed")
                     }
                 }
             }
@@ -100,16 +120,18 @@ public struct TranscriptionPipe: Sendable {
         return report.snapshot()
     }
 
-    /// A partial replaces the words before it; a final is settled. Everything
-    /// else carries no transcript.
-    static func segments(from event: SpeechmaticsEvent) -> [TranscriptSegment] {
+    /// A short name for an event, for the debug log.
+    static func name(of event: SpeechmaticsEvent) -> String {
         switch event {
-        case .partial(let words):
-            return TranscriptSegmenter.segments(from: words, isFinal: false)
-        case .final(let words):
-            return TranscriptSegmenter.segments(from: words, isFinal: true)
-        default:
-            return []
+        case .recognising(let id): return "started \(id)"
+        case .partial(let words): return "partial (\(words.count) words)"
+        case .final(let words): return "final (\(words.count) words)"
+        case .endOfTranscript: return "end of transcript"
+        case .endOfUtterance: return "end of utterance"
+        case .info(let text): return "info: \(text)"
+        case .warning(let text): return "warning: \(text)"
+        case .failure(let text): return "failure: \(text)"
+        case .ignored(let name): return "ignored \(name)"
         }
     }
 
