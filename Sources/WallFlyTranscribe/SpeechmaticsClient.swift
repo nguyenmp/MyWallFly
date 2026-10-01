@@ -91,7 +91,7 @@ public actor SpeechmaticsClient {
         while !Task.isCancelled && !closed {
             do {
                 let message = try await socket.receive()
-                handle(message)
+                if !handle(message) { break }
             } catch {
                 if !closed {
                     deliver(.failure(error.localizedDescription))
@@ -104,7 +104,10 @@ public actor SpeechmaticsClient {
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message) {
+    /// Returns false when the transcript is complete and there is no reason to
+    /// keep the socket open. `EndOfTranscript` is the service saying it has sent
+    /// everything, so waiting past it only makes Ctrl-C feel slow.
+    private func handle(_ message: URLSessionWebSocketTask.Message) -> Bool {
         let data: Data
         switch message {
         case .string(let text):
@@ -112,14 +115,16 @@ public actor SpeechmaticsClient {
         case .data(let raw):
             data = raw
         @unknown default:
-            return
+            return true
         }
 
         guard let event = try? TranscriptParser.event(fromJSON: data) else {
             deliver(.warning("could not read a message from the service"))
-            return
+            return true
         }
         deliver(event)
+        if case .endOfTranscript = event { return false }
+        return true
     }
 
     private func deliver(_ event: SpeechmaticsEvent) {

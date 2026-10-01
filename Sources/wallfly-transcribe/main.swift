@@ -1,19 +1,29 @@
+import Darwin
 import Foundation
 import WallFlyCapture
 import WallFlyTranscribe
 
-// Captures a meeting and streams it to Speechmatics, then prints the transcript.
+// Captures a meeting and streams it to Speechmatics, then prints the transcript
+// line by line as people talk.
 //
-//   swift run wallfly-transcribe 60                 both tracks, 60 seconds
-//   swift run wallfly-transcribe 60 mic-only        microphone only
-//   swift run wallfly-transcribe 60 --partials      also show the live partials
-//   swift run wallfly-transcribe --check            open a stream and stop, to test the key
+//   swift run wallfly-transcribe                  run until you press Ctrl-C
+//   swift run wallfly-transcribe 60               stop by itself after 60 seconds
+//   swift run wallfly-transcribe mic-only         microphone only, one stream
+//   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
+//   swift run wallfly-transcribe --check          open a stream and stop: tests the key
+//   swift run wallfly-transcribe 60 --verbose     log every message from the service
+//
+// While it runs, the bottom line of the terminal shows what is happening: the
+// words so far, or a sign of life when the room is quiet.
 //
 // The key comes from SPEECHMATICS_API_KEY, in the environment or in .env.
 // The app never holds a key of its own, and never writes one to a log.
 
+// MARK: - Reading the command line
+
 let arguments = Array(CommandLine.arguments.dropFirst())
-let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init) ?? 60
+/// Seconds to run for. Nil means run until someone stops it.
+let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init)
 let microphoneOnly = arguments.contains("mic-only")
 let showPartials = arguments.contains("--partials")
 let verbose = arguments.contains("--verbose")
@@ -23,9 +33,24 @@ func value(after flag: String, in arguments: [String]) -> String? {
     return arguments[index + 1]
 }
 
+/// Writes straight through, so a line shows up the moment it is made. `print`
+/// sits in a buffer when the output is a pipe, which hides a live transcript.
+enum Console {
+    static func out(_ text: String) {
+        FileHandle.standardOutput.write(Data((text + "\n").utf8))
+    }
+
+    static func err(_ text: String) {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+
+    /// True when the error output is a terminal, so it can be redrawn in place.
+    static var canRedraw: Bool { isatty(STDERR_FILENO) == 1 }
+}
+
 let environment = DotEnv.load(path: DotEnv.defaultPath())
 guard let apiKey = environment["SPEECHMATICS_API_KEY"], !apiKey.isEmpty else {
-    FileHandle.standardError.write(Data("""
+    Console.err("""
     No Speechmatics key found.
 
     Copy .env.example to .env, then put your key in it:
@@ -38,37 +63,47 @@ guard let apiKey = environment["SPEECHMATICS_API_KEY"], !apiKey.isEmpty else {
 
     Get a key at https://portal.speechmatics.com
 
-    """.utf8))
+    """)
     exit(2)
 }
 
-let region: SpeechmaticsRegion =
-    (value(after: "--region", in: arguments) == "us") ? .us : .eu
-
+let region: SpeechmaticsRegion = (value(after: "--region", in: arguments) == "us") ? .us : .eu
 let maxSpeakers = value(after: "--max-speakers", in: arguments).flatMap(Int.init) ?? 50
-
-let captureConfiguration: CaptureConfiguration = microphoneOnly ? .microphoneOnly : .default
-
-// Which tracks to send. Each one costs a stream.
-let tracks: [AudioTrack] = microphoneOnly ? [.microphone] : AudioTrack.allCases
-
 let providerConfiguration = SpeechmaticsConfig(apiKey: apiKey,
                                                region: region,
                                                maxSpeakers: maxSpeakers)
 
-// Test the key without opening the microphone or spending a meeting's time.
+// MARK: - Stopping on Ctrl-C
+
+/// Keeps the signal sources alive for the life of the process.
+var signalSources: [DispatchSourceSignal] = []
+
+/// Fires once when the user presses Ctrl-C.
+let interrupt = AsyncStream<Void> { continuation in
+    signal(SIGINT, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+    source.setEventHandler {
+        continuation.yield(())
+        continuation.finish()
+    }
+    source.resume()
+    signalSources.append(source)
+}
+
+// MARK: - Check the key without holding a meeting
+
 if arguments.contains("--check") {
-    print("Testing the key against \(region.rawValue)…")
+    Console.out("Testing the key against \(region.rawValue)…")
     let client = SpeechmaticsClient(config: providerConfiguration)
     let listener = Task {
         for await event in client.events {
             switch event {
             case .recognising(let id):
-                print("The key works. Speechmatics opened stream \(id).")
+                Console.out("The key works. Speechmatics opened stream \(id).")
             case .failure(let reason):
-                FileHandle.standardError.write(Data("Refused: \(reason)\n".utf8))
+                Console.err("Refused: \(reason)\n")
             case .warning(let text):
-                print("Warning: \(text)")
+                Console.out("Warning: \(text)")
             default:
                 break
             }
@@ -77,7 +112,7 @@ if arguments.contains("--check") {
     do {
         try await client.start()
     } catch {
-        FileHandle.standardError.write(Data("Could not open a stream: \(error)\n".utf8))
+        Console.err("Could not open a stream: \(error)\n")
         await client.close()
         exit(1)
     }
@@ -86,29 +121,30 @@ if arguments.contains("--check") {
     exit(0)
 }
 
-// Replay a recording through the provider. No microphone, no permissions.
+// MARK: - Replay a recording
+
 if let filePath = value(after: "--file", in: arguments) {
     let url = URL(fileURLWithPath: filePath)
-    let frames: [AudioFrame]
+    let recording: [AudioFrame]
     do {
-        frames = try AudioFileSource.frames(from: url)
+        recording = try AudioFileSource.frames(from: url)
     } catch {
-        FileHandle.standardError.write(Data("Could not read \(filePath): \(error)\n".utf8))
+        Console.err("Could not read \(filePath): \(error)\n")
         exit(1)
     }
-    guard !frames.isEmpty else {
-        FileHandle.standardError.write(Data("\(filePath) holds no audio.\n".utf8))
+    guard !recording.isEmpty else {
+        Console.err("\(filePath) holds no audio.\n")
         exit(1)
     }
 
-    let seconds = Double(frames.count) * AudioFileSource.chunkSeconds
-    print("Replaying \(filePath) — \(String(format: "%.1f", seconds)) s through \(region.rawValue)")
+    let length = Double(recording.count) * AudioFileSource.chunkSeconds
+    Console.out("Replaying \(filePath) — \(String(format: "%.1f", length)) s through \(region.rawValue)")
 
     // Feed the frames at real time. The service expects a live pace.
     let stream = AsyncStream<AudioFrame> { continuation in
         Task {
             let began = Date()
-            for (index, frame) in frames.enumerated() {
+            for (index, frame) in recording.enumerated() {
                 let due = Double(index) * AudioFileSource.chunkSeconds
                 let elapsed = Date().timeIntervalSince(began)
                 if due > elapsed {
@@ -120,39 +156,53 @@ if let filePath = value(after: "--file", in: arguments) {
         }
     }
 
-    let printer = SegmentPrinter(showPartials: showPartials)
+    let printer = SegmentPrinter(showPartials: showPartials, canRedraw: Console.canRedraw)
     var pipe = TranscriptionPipe(config: providerConfiguration, tracks: [.microphone])
     if verbose {
-        pipe.debugLog = { print("  · \($0)") }
+        pipe.debugLog = { Console.out("  · \($0)") }
     }
+
+    let began = Date()
+    let heartbeat = printer.startHeartbeat {
+        "   replaying · \(String(format: "%4.1f", Date().timeIntervalSince(began))) s of \(String(format: "%.1f", length)) s"
+    }
+
     do {
         let report = try await pipe.run(captureStart: AudioFileSource.captureStart(),
                                         frames: stream) { event in
             printer.show(event)
         }
+        heartbeat.cancel()
         printer.finishLine()
-        print("")
-        print("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+        Console.out("")
+        Console.out("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
     } catch {
+        heartbeat.cancel()
         printer.finishLine()
-        FileHandle.standardError.write(Data("Transcription failed: \(error)\n".utf8))
+        Console.err("Transcription failed: \(error)\n")
         exit(1)
     }
     exit(0)
 }
 
-print("MyWallFly → Speechmatics — running for \(runSeconds) s")
-print("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
-print("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
+// MARK: - Listen to a meeting
+
+let captureConfiguration: CaptureConfiguration = microphoneOnly ? .microphoneOnly : .default
+let tracks: [AudioTrack] = microphoneOnly ? [.microphone] : AudioTrack.allCases
+
+Console.out("MyWallFly → Speechmatics"
+            + (runSeconds.map { " — running for \($0) s" } ?? " — press Ctrl-C to stop"))
+Console.out("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
+Console.out("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
 if !microphoneOnly {
-    print("screen recording: \(CapturePermissions.screenRecordingGranted ? "granted" : "not granted yet")")
+    Console.out("screen recording: \(CapturePermissions.screenRecordingGranted ? "granted" : "not granted yet")")
 }
 
 let capture: AudioCapture
 do {
     capture = try AudioCapture(configuration: captureConfiguration)
 } catch {
-    FileHandle.standardError.write(Data("Could not set up capture: \(error.localizedDescription)\n".utf8))
+    Console.err("Could not set up capture: \(error.localizedDescription)\n")
     exit(1)
 }
 
@@ -160,80 +210,126 @@ let start: CaptureStart
 do {
     start = try await capture.start()
 } catch {
-    FileHandle.standardError.write(Data("Could not start capture: \(error.localizedDescription)\n".utf8))
+    Console.err("Could not start capture: \(error.localizedDescription)\n")
     if !microphoneOnly && !CapturePermissions.screenRecordingGranted {
-        print("Grant Screen Recording in System Settings, then run again.")
+        Console.out("Grant Screen Recording in System Settings, then run again.")
     }
     exit(1)
 }
 
 for trackStart in start.starts {
     let pad = TranscriptionPipe.leadingSilenceByteCount(offset: trackStart.offset)
-    print("\(trackStart.track.rawValue) started \(String(format: "+%.0f ms", trackStart.offset * 1000)) into the meeting"
-          + (pad > 0 ? " (padding \(pad) bytes of silence)" : ""))
+    Console.out("\(trackStart.track.rawValue) started \(String(format: "+%.0f ms", trackStart.offset * 1000)) into the meeting"
+                + (pad > 0 ? " (padding \(pad) bytes of silence)" : ""))
 }
 
-/// Prints one line per segment. Partial lines reuse the same line, so the
-/// terminal does not scroll while someone is still talking.
-let printer = SegmentPrinter(showPartials: showPartials)
-
+let printer = SegmentPrinter(showPartials: showPartials, canRedraw: Console.canRedraw)
 var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
 if verbose {
-    pipe.debugLog = { print("  · \($0)") }
+    pipe.debugLog = { Console.out("  · \($0)") }
 }
+
 let runner = Task {
     try await pipe.run(captureStart: start, frames: capture.frames) { event in
         printer.show(event)
     }
 }
 
-try? await Task.sleep(nanoseconds: UInt64(runSeconds * 1_000_000_000))
+/// A sign of life every second, so a quiet room does not look like a hang.
+let heartbeat = printer.startHeartbeat {
+    let stats = capture.stats()
+    let seconds = stats.tracks.map(\.seconds).max() ?? 0
+    let dropped = stats.tracks.reduce(0) { $0 + $1.dropped }
+    return "   listening · \(String(format: "%5.1f", seconds)) s of audio · \(dropped) dropped"
+}
+
+// Stop on the clock, on Ctrl-C, or never.
+await withTaskGroup(of: Void.self) { group in
+    group.addTask {
+        for await _ in interrupt { break }
+    }
+    if let runSeconds {
+        group.addTask {
+            try? await Task.sleep(nanoseconds: UInt64(runSeconds * 1_000_000_000))
+        }
+    }
+    await group.next()
+    group.cancelAll()
+}
+
+heartbeat.cancel()
 await capture.stop()
 
 do {
     let report = try await runner.value
     printer.finishLine()
-    print("")
-    print("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+    Console.out("")
+    Console.out("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
     if let lastError = report.lastError {
-        print("last drop: \(lastError)")
+        Console.out("last drop: \(lastError)")
     }
-    let stats = capture.stats()
-    for track in stats.tracks {
-        print("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
-              + "\(track.dropped) dropped buffers, drift \(String(format: "%.0f ms", track.drift * 1000))")
+    for track in capture.stats().tracks {
+        Console.out("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
+                    + "\(track.dropped) dropped buffers, drift \(String(format: "%.0f ms", track.drift * 1000))")
     }
 } catch {
     printer.finishLine()
-    FileHandle.standardError.write(Data("Transcription failed: \(error)\n".utf8))
+    Console.err("Transcription failed: \(error)\n")
     exit(1)
 }
 
-/// Keeps partial lines and final lines from fighting over the same row.
+/// Prints final lines as they land, and keeps one updating line for everything
+/// else: the words so far, or a sign of life.
 final class SegmentPrinter: @unchecked Sendable {
     private let lock = NSLock()
     private let showPartials: Bool
-    private var openPartial = false
+    private let canRedraw: Bool
+    private var openLine = false
 
-    init(showPartials: Bool) {
+    init(showPartials: Bool, canRedraw: Bool) {
         self.showPartials = showPartials
+        self.canRedraw = canRedraw
+    }
+
+    /// Redraws the bottom line. Does nothing when the output is not a terminal,
+    /// where redrawing would fill a log with junk.
+    func status(_ text: String) {
+        guard canRedraw else { return }
+        lock.lock(); defer { lock.unlock() }
+        let clipped = String(text.prefix(240))
+        Console.err("\r\u{1B}[K" + clipped)
+        openLine = true
+    }
+
+    /// Runs `text` once a second until the task is cancelled.
+    func startHeartbeat(_ text: @escaping @Sendable () -> String) -> Task<Void, Never> {
+        guard canRedraw else { return Task {} }
+        return Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                if Task.isCancelled { break }
+                status(text())
+            }
+        }
     }
 
     func show(_ event: TranscriptionEvent) {
         let segment = event.segment
-        guard segment.isFinal else {
-            guard showPartials else { return }
-            lock.lock(); defer { lock.unlock() }
-            clearLocked()
-            let text = "   … \(label(for: event)): \(segment.text)"
-            FileHandle.standardError.write(Data(text.prefix(200).utf8))
-            openPartial = true
+
+        if !segment.isFinal {
+            if canRedraw {
+                status("   … \(label(for: event)): \(segment.text)")
+            } else if showPartials {
+                lock.lock(); defer { lock.unlock() }
+                clearLocked()
+                Console.out("   … \(label(for: event)): \(segment.text)")
+            }
             return
         }
 
         lock.lock(); defer { lock.unlock() }
         clearLocked()
-        print(line(for: event))
+        Console.out(line(for: event))
     }
 
     func finishLine() {
@@ -242,9 +338,9 @@ final class SegmentPrinter: @unchecked Sendable {
     }
 
     private func clearLocked() {
-        guard openPartial else { return }
-        FileHandle.standardError.write(Data("\r\u{1B}[K".utf8))
-        openPartial = false
+        guard openLine else { return }
+        Console.err("\r\u{1B}[K")
+        openLine = false
     }
 
     private func line(for event: TranscriptionEvent) -> String {
