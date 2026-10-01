@@ -2,7 +2,7 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: the capture helper works. The rest of the app is not built yet.** Everything below is a decision, a reason, or an open question.
+**Status: capture works, and audio now reaches Speechmatics. Nothing is stored or shown in a page yet.** Everything below is a decision, a reason, or an open question.
 
 ## Try it now
 
@@ -17,6 +17,31 @@ swift run wallfly-capture-probe 20 --wav out    # also write out/mic.wav and out
 Speak, and play something out loud, so both tracks see audio. The microphone needs Microphone approval and system audio needs Screen Recording approval. Nothing can grant either one from a script: a person has to click the prompt once.
 
 The library lives in `Sources/WallFlyCapture`, the command line check in `Sources/wallfly-capture-probe`.
+
+### Transcribe a meeting
+
+`Sources/WallFlyTranscribe` is the Speechmatics client, and `Sources/wallfly-transcribe` runs it. Copy `.env.example` to `.env`, put your key in it, then:
+
+```sh
+swift run wallfly-transcribe --check         # open a stream and stop: tests the key
+swift run wallfly-transcribe 60              # both tracks, 60 seconds
+swift run wallfly-transcribe 60 mic-only     # microphone only, one stream
+swift run wallfly-transcribe 60 --partials   # also show words as they land
+```
+
+The key is your own. The app never holds one and never pays for your audio. Never paste a key into a chat, an issue, or a log: treat any key that has been pasted as public and rotate it.
+
+Each track goes to its own stream, so the service diarizes each input on its own. Before any real audio, the pipe sends silence at the front of whichever track started later. That puts both streams on the meeting clock, so a timestamp from the service is already a meeting timestamp.
+
+Two streams at once uses the whole Speechmatics trial quota, which allows two. Mixing the tracks instead is still an open question below.
+
+### Run the checks
+
+```sh
+swift test
+```
+
+The tests need no key and no network. They cover reading a `.env` file, the start message, every message the service sends back, and the rules that join words into transcript lines. They use `swift-testing`, which ships with the toolchain, so a full Xcode install is not needed.
 
 ## What it does
 
@@ -99,11 +124,21 @@ What the spike and the helper found on real hardware:
 - The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run. We measured 80 to 90 ms between the two tracks on every run.
 - A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
 
+The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one real-time stream per track, sends the audio, and turns the replies into transcript lines with speaker labels. It lines the two streams up on the meeting clock by sending silence at the front of whichever track began later. The `wallfly-transcribe` command runs the whole thing.
+
+What is proven, and what is not:
+
+- The start message and the message parser are checked against Speechmatics' own message shapes. 31 tests pass with no key and no network.
+- A bad key comes back as "Not Authorized" in about a second, not as a hang. TLS, the socket, and the error path all work.
+- Nothing has run against a real meeting yet. That needs a real key, plus a person to approve the microphone and Screen Recording.
+- Nothing is stored and no page shows the transcript. The live speaker labels are not yet replaced by the end-of-meeting batch pass; that pass is not written.
+
 ## Next step
 
-1. Run the helper for ten minutes or longer and see whether the two clocks drift apart over a long meeting. Short runs show almost no drift: under 40 ms at the end of a five second run.
-2. Send the frames to Speechmatics. The helper stops at the edge of the app, so nothing talks to a provider yet.
-3. Two quick checks: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
+1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer. That answers two open questions at once: does a long run drift, and does the transcript match the room.
+2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
+3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
+4. Store the transcript in SQLite, then add the second pass that replaces the live speaker labels with the tighter batch result.
 
 The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
 
@@ -120,6 +155,7 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **Sending audio to a provider is a bigger deal than storing it yourself.** The recording leaves the machine, so the consent question is sharper. Depending on where your users are, recording other people may require all-party consent.
 - **Speakers cause echo.** System audio leaks into the microphone, and the same words show up twice.
 - **Far-field audio is the hardest case.** Room echo and people talking over each other hurt diarization most. Published accuracy numbers will not match your room.
+- **A Command Line Tools install can fail to load the swift-testing macros.** With no full Xcode, `swift test` sometimes stopped with "plugin for module 'TestingMacros' not found". That is a toolchain problem, not a test failure, and it hit about a third of runs. `Package.swift` now points the compiler straight at the plugin directory, which fixed it. If it comes back, check that the directory still exists.
 
 ## Considered, not using
 
