@@ -76,10 +76,22 @@ correction (meeting_id, kind, start_ms, end_ms, value, made_at)
 
 ## Next step
 
-Step 1 is done. Both passes work on a real meeting, so the capture helper is next.
+Step 1 is done. Both passes work on a real meeting. The capture spike then answered the riskiest questions, so the real capture helper is next.
 
-1. Build the Swift capture helper. It captures the microphone and the system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app with the start offset of each track. Prove this piece first. It is the riskiest code in the project.
-2. Two quick checks, before or while you build: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
+What the spike found on real hardware:
+
+- Both tracks work. The mic arrives at 16 kHz mono, the format we want, with no conversion.
+- System audio arrives at 48 kHz stereo. It needs a mix down to mono and a drop to 16 kHz.
+- The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run.
+- A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
+
+Next:
+
+1. Build the Swift capture helper. It captures the microphone and the system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app with the start offset of each track.
+2. Run the spike for ten minutes and see whether the two clocks drift apart over a long meeting.
+3. Two quick checks: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
+
+The spike lives in `spike/capture-offset`. It is temporary. When the real helper works, copy the spike's settings and its permission code across, then delete the whole folder. One copy of that code, in one place, or the two will drift apart and you will fix the same bug twice.
 
 ## Traps
 
