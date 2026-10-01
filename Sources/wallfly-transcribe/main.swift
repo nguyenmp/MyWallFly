@@ -10,10 +10,15 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe 60               stop by itself after 60 seconds
 //   swift run wallfly-transcribe mic-only         microphone only, one stream
 //   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
-//   swift run wallfly-transcribe --out notes.txt  write to a file to watch with tail -f
+//   swift run wallfly-transcribe --out runs/one   write into that folder instead
+//   swift run wallfly-transcribe --out notes.txt  one transcript file, no audio
 //   swift run wallfly-transcribe --final-only     do not follow the words being spoken
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
+//
+// Every run makes a folder named after the moment it started. The folder holds
+// the transcript and one WAV file per track: the second pass at the end of a
+// meeting needs the audio again.
 //
 // While it runs, the bottom line of the terminal shows the words so far.
 // Finished lines scroll up above it.
@@ -136,28 +141,60 @@ if arguments.contains("--check") {
     exit(0)
 }
 
-// MARK: - Where the transcript goes
+// MARK: - Where the run's files go
 
-/// `--out` keeps the transcript in a file, which always holds it as it stands:
-/// every settled line, plus one open line for the words still being spoken.
-/// That open line is rewritten in place on every update, so the file is never
-/// half a sentence behind.
-var transcriptFile: FileHandle?
-if let outPath = value(after: "--out", in: arguments) {
-    if !FileManager.default.fileExists(atPath: outPath) {
-        FileManager.default.createFile(atPath: outPath, contents: nil)
-    }
-    guard let handle = FileHandle(forWritingAtPath: outPath) else {
-        Console.err("Could not open \(outPath) for writing.\n")
+/// A run writes into a folder named after the moment it started, so nothing from
+/// one meeting lands on top of another. The folder holds the transcript and one
+/// WAV file per track: the second pass at the end of a meeting needs the audio
+/// again.
+///
+/// `--out` moves the folder. A path ending in `.txt` means a transcript on its
+/// own, with no folder and no audio.
+///
+/// The transcript file always holds the transcript as it stands: every settled
+/// line, plus one open line for the words still being spoken. That open line is
+/// rewritten in place on every update, so the file is never half a sentence
+/// behind.
+let runFolder: URL?
+let transcriptPath: String
+switch value(after: "--out", in: arguments) {
+case .some(let given) where given.hasSuffix(".txt"):
+    runFolder = nil
+    transcriptPath = given
+case .some(let given):
+    let folder = URL(fileURLWithPath: given, isDirectory: true)
+    runFolder = folder
+    transcriptPath = folder.appendingPathComponent("transcript.txt").path
+case .none:
+    let folder = URL(fileURLWithPath: RunStamp.now(), isDirectory: true)
+    runFolder = folder
+    transcriptPath = folder.appendingPathComponent("transcript.txt").path
+}
+
+if let runFolder {
+    do {
+        try FileManager.default.createDirectory(at: runFolder, withIntermediateDirectories: true)
+    } catch {
+        Console.err("Could not make \(runFolder.path): \(error)\n")
         exit(1)
     }
-    // A run owns its file. An older transcript in it would only confuse.
-    try? handle.truncate(atOffset: 0)
-    transcriptFile = handle
-    Console.note("transcript: \(outPath)")
-    if !finalOnly {
-        Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
-    }
+    Console.note("run folder: \(runFolder.path)")
+}
+
+var transcriptFile: FileHandle?
+if !FileManager.default.fileExists(atPath: transcriptPath) {
+    FileManager.default.createFile(atPath: transcriptPath, contents: nil)
+}
+guard let handle = FileHandle(forWritingAtPath: transcriptPath) else {
+    Console.err("Could not open \(transcriptPath) for writing.\n")
+    exit(1)
+}
+// A run owns its file. An older transcript in it would only confuse.
+try? handle.truncate(atOffset: 0)
+transcriptFile = handle
+Console.note("transcript: \(transcriptPath)")
+if !finalOnly {
+    Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
 }
 
 // MARK: - Replay a recording
@@ -226,6 +263,26 @@ if let filePath = value(after: "--file", in: arguments) {
 let captureConfiguration: CaptureConfiguration = microphoneOnly ? .microphoneOnly : .default
 let tracks: [AudioTrack] = microphoneOnly ? [.microphone] : AudioTrack.allCases
 
+/// One WAV file per track, so the second pass at the end of a meeting can hear
+/// the same audio again. Buffers go straight to disk: a meeting is far too long
+/// to hold in memory.
+var openedWriters: [AudioTrack: WavWriter] = [:]
+if let runFolder {
+    do {
+        for track in tracks {
+            let url = runFolder.appendingPathComponent("\(track.rawValue).wav")
+            openedWriters[track] = try WavWriter(path: url.path)
+        }
+    } catch {
+        Console.err("Could not open the WAV files: \(error)\n")
+        exit(1)
+    }
+}
+let wavWriters = openedWriters
+for track in tracks {
+    if let writer = wavWriters[track] { Console.note("audio:      \(writer.path)") }
+}
+
 Console.note("MyWallFly → Speechmatics"
             + (runSeconds.map { " — running for \($0) s" } ?? " — press Ctrl-C to stop"))
 Console.note("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
@@ -267,6 +324,12 @@ var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
 if verbose {
     pipe.debugLog = { Console.note("  · \($0)") }
 }
+// Keep the audio as it goes past, for the second pass later.
+if !wavWriters.isEmpty {
+    pipe.recordFrame = { frame in
+        wavWriters[frame.track]?.append(frame.pcm)
+    }
+}
 
 let runner = Task {
     try await pipe.run(captureStart: start, frames: capture.frames) { event in
@@ -290,6 +353,7 @@ await withTaskGroup(of: Void.self) { group in
 
 await capture.stop()
 
+var exitCode: Int32 = 0
 do {
     let report = try await runner.value
     printer.finishLine()
@@ -302,12 +366,23 @@ do {
         Console.note("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
                     + "\(track.dropped) dropped buffers, drift \(String(format: "%.0f ms", track.drift * 1000))")
     }
-    try? transcriptFile?.close()
 } catch {
     printer.finishLine()
     Console.err("Transcription failed: \(error)\n")
-    exit(1)
+    exitCode = 1
 }
+
+// Fill in each WAV header, so the files are playable and report the right
+// length. This runs even when the meeting failed: the audio is still worth
+// keeping, and an unfilled header makes a file that will not open.
+for track in tracks {
+    guard let writer = wavWriters[track] else { continue }
+    let failure = writer.close()
+    Console.note("\(writer.path) — \(String(format: "%.1f", writer.seconds)) s")
+    if let failure { Console.note("  could not finish it: \(failure)") }
+}
+try? transcriptFile?.close()
+exit(exitCode)
 
 /// Keeps the transcript up to date: settled lines, plus one open line for the
 /// words still being spoken.

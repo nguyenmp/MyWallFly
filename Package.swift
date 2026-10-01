@@ -45,6 +45,12 @@ let package = Package(
             path: "Sources/wallfly-transcribe"
         ),
         .testTarget(
+            name: "WallFlyCaptureTests",
+            dependencies: ["WallFlyCapture"],
+            path: "Tests/WallFlyCaptureTests",
+            swiftSettings: macroPluginSettings
+        ),
+        .testTarget(
             name: "WallFlyTranscribeTests",
             dependencies: ["WallFlyTranscribe"],
             path: "Tests/WallFlyTranscribeTests",

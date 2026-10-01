@@ -36,6 +36,10 @@ public struct TranscriptionPipe: Sendable {
     /// Every event from the service, for chasing a problem. Leave it nil in the app.
     public var debugLog: (@Sendable (String) -> Void)?
 
+    /// Called with every frame as it arrives, just before it goes to the service.
+    /// Use it to keep the audio for the second pass at the end of a meeting.
+    public var recordFrame: (@Sendable (AudioFrame) -> Void)?
+
     public init(config: SpeechmaticsConfig, tracks: [AudioTrack] = AudioTrack.allCases) {
         self.config = config
         self.tracks = tracks
@@ -100,6 +104,7 @@ public struct TranscriptionPipe: Sendable {
         }
 
         for await frame in frames {
+            recordFrame?(frame)
             guard let client = clients[frame.track] else { continue }
             do {
                 try await client.send(frame.pcm)

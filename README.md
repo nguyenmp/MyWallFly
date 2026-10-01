@@ -22,7 +22,7 @@ out/wallfly-2026-10-01T20-30-46Z-mic.wav
 out/wallfly-2026-10-01T20-30-46Z-system.wav
 ```
 
-It prints every path it writes.
+It prints each path as it opens the file, and again at the end with how much audio it holds. Buffers go straight to disk, so a long run stays out of memory.
 
 Speak, and play something out loud, so both tracks see audio. The microphone needs Microphone approval and system audio needs Screen Recording approval. Nothing can grant either one from a script: a person has to click the prompt once.
 
@@ -38,7 +38,7 @@ swift run wallfly-transcribe                 # listen until you press Ctrl-C
 swift run wallfly-transcribe 60              # stop by itself after 60 seconds
 swift run wallfly-transcribe mic-only        # microphone only, one stream
 swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
-swift run wallfly-transcribe --out notes.txt # write to a file to watch with tail -f
+swift run wallfly-transcribe --out runs/monday # write into that folder instead
 swift run wallfly-transcribe --final-only    # do not follow the words being spoken
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
 ```
@@ -57,9 +57,33 @@ Press Ctrl-C to stop. It stops in about a third of a second, flushes the last wo
 
 `--partials` adds the words in progress when the output is not a terminal, for example in a log.
 
-### Writing to a file
+### What a run writes
 
-`--out notes.txt` keeps the transcript in a file. The file always holds it as it stands: every settled line, plus one open line for the words still being spoken.
+Every run makes a folder named after the moment it started:
+
+```
+2026-10-01T20-44-25Z/
+  transcript.txt   the transcript as it stands, kept up to date live
+  mic.wav          what the microphone heard
+  system.wav       what the speakers played
+```
+
+The name is the run's start time in UTC, so two runs never land on top of each other. The run prints the folder and each path at the start, and each file again at the end with its length.
+
+The audio is kept because the second pass at the end of a meeting needs it: the tighter batch result replaces the live speaker labels. Delete the folder once that pass is done.
+
+Buffers go straight to disk as they arrive, so a long meeting never sits in memory.
+
+`--out` moves the folder. Point it at a folder and everything goes there. Point it at a path ending in `.txt` and you get that transcript file on its own, with no audio and no folder:
+
+```sh
+swift run wallfly-transcribe --out runs/monday   # a folder with a name you choose
+swift run wallfly-transcribe --out notes.txt     # one transcript file, no audio
+```
+
+### Reading the transcript while it runs
+
+`transcript.txt` always holds the transcript as it stands: every settled line, plus one open line for the words still being spoken.
 
 ```
 [   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
@@ -135,6 +159,8 @@ The tests need no key and no network. They cover reading a `.env` file, the star
 11. **Keep the provider's transcript as it comes. Never edit it.** Show the raw text plus the user's changes. The second pass at the end of a meeting replaces the speaker labels, and it would erase any change written into the raw text.
 12. **Point changes at a time, not at a speaker name.** The live pass and the batch pass give the same voice different names, so a change marks a stretch of time on a track.
 13. **Let people name speakers.** S1 becomes Mark once, and the name stays for the rest of the meeting.
+14. **Give every run its own folder, named after the moment it started.** Putting the run's start time in the name is simpler than a queue of numbers, it keeps two runs apart without any bookkeeping, and it sorts by itself. The folder holds the transcript and each track's audio.
+15. **Write WAV files at 16 kHz mono.** The provider says that is the format it handles best, and it is what capture already produces, so nothing has to be converted and nothing has to be encoded. See "Do we need a compressed format?" below.
 
 ## Edits
 
@@ -167,6 +193,18 @@ correction (meeting_id, kind, start_ms, end_ms, value, made_at)
 - Never build a key into the app. Anyone can pull it out, and they would spend your money.
 - Treat a key that has been pasted into a chat, an issue, or a log as public. Rotate it.
 
+## Do we need a compressed format?
+
+No, not now.
+
+WAV at 16 kHz mono costs 115 MB per track per hour, so 230 MB for the two tracks of a meeting. A two hour meeting is about half a gigabyte. That sounds like a lot next to a compressed file, but the folder is deleted as soon as the end-of-meeting pass is done, so it never piles up on disk.
+
+The provider is clear that 16-bit 16 kHz mono WAV is the best input. Anything else it transcodes on its own side, which trades disk space for server time. Capture already produces exactly that format, so WAV means no encoder, no decoder, and one file you can open in any tool.
+
+If size ever does bite, the safe next step is FLAC. It is lossless, macOS can write it without a new dependency, and the batch API accepts it. Going lossy is a bigger change than it looks: the saved audio is what the second pass reads, and what a later provider change would read, so a lossy file puts a step between us and the only copy of the meeting.
+
+What would change the answer: keeping the audio after the second pass, a provider that charges by upload size, or a meeting long enough that half a gigabyte matters.
+
 ## Still open
 
 - **Stream limits.** The Speechmatics trial allows 2 streams at once. Two tracks sent as two streams would use the whole quota for one user. Decide whether to mix the tracks or pay for more.
@@ -187,11 +225,11 @@ What the spike and the helper found on real hardware:
 - The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run. We measured 80 to 90 ms between the two tracks on every run.
 - A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
 
-The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one real-time stream per track, sends the audio, and turns the replies into transcript lines with speaker labels. It lines the two streams up on the meeting clock by sending silence at the front of whichever track began later. The `wallfly-transcribe` command runs the whole thing.
+The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one real-time stream per track, sends the audio, and turns the replies into transcript lines with speaker labels. It lines the two streams up on the meeting clock by sending silence at the front of whichever track began later. The `wallfly-transcribe` command runs the whole thing, and writes the transcript and both tracks' audio into a folder named after the moment the run started.
 
 What is proven:
 
-- 37 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, and the rules that join words into lines.
+- 48 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, the rules that join words into lines, and the WAV writer.
 - A bad key comes back as "Not Authorized" in about a second, not as a hang.
 - Two voices replayed through the provider came back as two lines, labelled S1 and S2, with the words right.
 - A live run on both tracks reaches the provider and ends cleanly: 1841 buffers, none dropped. Ctrl-C stops it in about a third of a second and the last words still arrive.
@@ -200,14 +238,15 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- Nothing is stored and no page shows the transcript. The live speaker labels are not yet replaced by the end-of-meeting batch pass; that pass is not written.
+- No page shows the transcript, and nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 
 1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer. That answers two open questions at once: does a long run drift, and does the transcript match the room.
 2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
 3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
-4. Store the transcript in SQLite, then add the second pass that replaces the live speaker labels with the tighter batch result.
+4. Send the saved audio through the batch pass and replace the live speaker labels with the result. Delete the folder once that lands.
+5. Store the transcript in SQLite, then show it on a page.
 
 The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
 

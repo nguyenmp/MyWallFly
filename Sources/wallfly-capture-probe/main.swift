@@ -14,14 +14,14 @@ import WallFlyCapture
 //
 // Each run names its files after the moment it started, so two runs never
 // overwrite each other and the two tracks of one run sort together.
+//
+// Audio goes to disk as it arrives, so a long run stays out of memory.
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init) ?? 20
 let microphoneOnly = arguments.contains("mic-only")
 // `--out` on its own writes here. `--out <directory>` writes there. No flag, no files.
 let outDirectory = arguments.contains("--out") ? (value(after: "--out", in: arguments) ?? ".") : nil
-// Read the time once, so both tracks carry the same stamp.
-let stamp = runStamp()
 
 func value(after flag: String, in arguments: [String]) -> String? {
     guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
@@ -30,15 +30,6 @@ func value(after flag: String, in arguments: [String]) -> String? {
     // value too. Runs always put the seconds first, so nothing is lost.
     let next = arguments[index + 1]
     return next.hasPrefix("-") || next == "mic-only" || Double(next) != nil ? nil : next
-}
-
-/// The moment this run started, as ISO 8601 in UTC, with dashes in place of the
-/// colons. Finder shows a colon in a file name as a slash, so keep it out.
-func runStamp(_ date: Date = Date()) -> String {
-    let formatter = ISO8601DateFormatter()
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter.string(from: date).replacingOccurrences(of: ":", with: "-")
 }
 
 func secs(_ value: Double?) -> String {
@@ -51,11 +42,48 @@ func signed(_ value: Double) -> String {
 }
 
 let configuration: CaptureConfiguration = microphoneOnly ? .microphoneOnly : .default
+let recordedTracks: [AudioTrack] = microphoneOnly ? [.microphone] : AudioTrack.allCases
 
 print("MyWallFly capture helper — running for \(secs(runSeconds)) s")
 print("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
 if !microphoneOnly {
     print("screen recording: \(CapturePermissions.screenRecordingGranted ? "granted" : "not granted yet")")
+}
+
+// Open the files before capture starts. That way the paths are known up front,
+// and each buffer can go straight to disk as it arrives.
+var opened: [AudioTrack: WavWriter] = [:]
+if let outDirectory {
+    let directory = URL(fileURLWithPath: outDirectory, isDirectory: true)
+    let stamp = RunStamp.now()
+    print("")
+    print("writing WAV files to \(directory.path)")
+    do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for track in recordedTracks {
+            let url = directory.appendingPathComponent("wallfly-\(stamp)-\(track.rawValue).wav")
+            opened[track] = try WavWriter(path: url.path)
+            print("  \(track.rawValue): \(url.path)")
+        }
+    } catch {
+        print("Could not open the WAV files: \(error)")
+        exit(1)
+    }
+}
+let writers = opened
+
+/// Fills in every file's header and closes it. Returns anything that went wrong.
+func closeWriters() -> [String] {
+    var failures: [String] = []
+    for track in recordedTracks {
+        guard let writer = writers[track] else { continue }
+        let size = String(format: "%.3f", writer.seconds)
+        print("\(writer.path) — \(size) s")
+        if let failure = writer.close() {
+            failures.append("\(track.rawValue): \(failure)")
+        }
+    }
+    return failures
 }
 
 let capture: AudioCapture
@@ -70,25 +98,9 @@ if ProcessInfo.processInfo.environment["WALLFLY_DEBUG"] != nil {
     capture.debugLog = { print("format: \($0)") }
 }
 
-// Collect the frames, so we can count them and write them out afterwards.
-actor Collector {
-    private var audio: [AudioTrack: Data] = [:]
-    private var frames: [AudioTrack: Int] = [:]
-
-    func add(_ frame: AudioFrame) {
-        audio[frame.track, default: Data()].append(frame.pcm)
-        frames[frame.track, default: 0] += 1
-    }
-
-    func summary() -> (frames: [AudioTrack: Int], audio: [AudioTrack: Data]) {
-        (frames, audio)
-    }
-}
-
-let collector = Collector()
 let reader = Task {
     for await frame in capture.frames {
-        await collector.add(frame)
+        writers[frame.track]?.append(frame.pcm)
     }
 }
 
@@ -134,49 +146,10 @@ for trackStats in stats.tracks {
 }
 print("video frames captured and thrown away: \(stats.discardedVideoFrames)")
 
-if let outDirectory {
-    let (_, audio) = await collector.summary()
-    let directory = URL(fileURLWithPath: outDirectory, isDirectory: true)
+if !writers.isEmpty {
     print("")
-    print("writing WAV files to \(directory.path)")
-    do {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // Walk the tracks in a fixed order, so the paths always print the same way.
-        for track in AudioTrack.allCases {
-            guard let pcm = audio[track] else { continue }
-            let url = directory.appendingPathComponent("wallfly-\(stamp)-\(track.rawValue).wav")
-            try wav(from: pcm).write(to: url)
-            print("  \(url.path) — \(pcm.count / CaptureFormat.bytesPerSecond) s")
-        }
-    } catch {
-        print("Could not write the WAV files: \(error.localizedDescription)")
+    print("--- files ---")
+    for failure in closeWriters() {
+        print("could not finish \(failure)")
     }
-}
-
-/// Mates are two tracks, not one file. Wrapping the raw PCM in a WAV header
-/// makes each one playable, so you can hear whether they line up.
-func wav(from pcm: Data) -> Data {
-    var file = Data()
-    let byteRate = UInt32(CaptureFormat.bytesPerSecond)
-    let blockAlign = UInt16(CaptureFormat.channels * CaptureFormat.bytesPerSample)
-
-    func append(_ text: String) { file.append(contentsOf: Array(text.utf8)) }
-    func append32(_ number: UInt32) { withUnsafeBytes(of: number.littleEndian) { file.append(contentsOf: $0) } }
-    func append16(_ number: UInt16) { withUnsafeBytes(of: number.littleEndian) { file.append(contentsOf: $0) } }
-
-    append("RIFF")
-    append32(UInt32(36 + pcm.count))
-    append("WAVE")
-    append("fmt ")
-    append32(16)                                   // size of the format block
-    append16(1)                                    // 1 means plain PCM
-    append16(UInt16(CaptureFormat.channels))
-    append32(UInt32(CaptureFormat.sampleRate))
-    append32(byteRate)
-    append16(blockAlign)
-    append16(UInt16(CaptureFormat.bytesPerSample * 8))
-    append("data")
-    append32(UInt32(pcm.count))
-    file.append(pcm)
-    return file
 }
