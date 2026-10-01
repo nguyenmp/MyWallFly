@@ -13,8 +13,8 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
 //
-// While it runs, the bottom line of the terminal shows what is happening: the
-// words so far, or a sign of life when the room is quiet.
+// While it runs, the bottom line of the terminal shows the words so far.
+// Finished lines scroll up above it.
 //
 // The key comes from SPEECHMATICS_API_KEY, in the environment or in .env.
 // The app never holds a key of its own, and never writes one to a log.
@@ -162,22 +162,15 @@ if let filePath = value(after: "--file", in: arguments) {
         pipe.debugLog = { Console.out("  · \($0)") }
     }
 
-    let began = Date()
-    let heartbeat = printer.startHeartbeat {
-        "   replaying · \(String(format: "%4.1f", Date().timeIntervalSince(began))) s of \(String(format: "%.1f", length)) s"
-    }
-
     do {
         let report = try await pipe.run(captureStart: AudioFileSource.captureStart(),
                                         frames: stream) { event in
             printer.show(event)
         }
-        heartbeat.cancel()
         printer.finishLine()
         Console.out("")
         Console.out("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
     } catch {
-        heartbeat.cancel()
         printer.finishLine()
         Console.err("Transcription failed: \(error)\n")
         exit(1)
@@ -235,14 +228,6 @@ let runner = Task {
     }
 }
 
-/// A sign of life every second, so a quiet room does not look like a hang.
-let heartbeat = printer.startHeartbeat {
-    let stats = capture.stats()
-    let seconds = stats.tracks.map(\.seconds).max() ?? 0
-    let dropped = stats.tracks.reduce(0) { $0 + $1.dropped }
-    return "   listening · \(String(format: "%5.1f", seconds)) s of audio · \(dropped) dropped"
-}
-
 // Stop on the clock, on Ctrl-C, or never.
 await withTaskGroup(of: Void.self) { group in
     group.addTask {
@@ -257,7 +242,6 @@ await withTaskGroup(of: Void.self) { group in
     group.cancelAll()
 }
 
-heartbeat.cancel()
 await capture.stop()
 
 do {
@@ -299,18 +283,6 @@ final class SegmentPrinter: @unchecked Sendable {
         let clipped = String(text.prefix(240))
         Console.err("\r\u{1B}[K" + clipped)
         openLine = true
-    }
-
-    /// Runs `text` once a second until the task is cancelled.
-    func startHeartbeat(_ text: @escaping @Sendable () -> String) -> Task<Void, Never> {
-        guard canRedraw else { return Task {} }
-        return Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if Task.isCancelled { break }
-                status(text())
-            }
-        }
     }
 
     func show(_ event: TranscriptionEvent) {

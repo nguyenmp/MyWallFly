@@ -33,12 +33,12 @@ swift run wallfly-transcribe 60 --verbose    # also log every message from the s
 
 Lines appear as people talk. Nothing waits for the meeting to end.
 
-The bottom line of the terminal shows the words so far while someone is mid sentence, and a running total when the room is quiet, so a silent room never looks like a hang:
+One line at the bottom of the terminal shows the words so far while someone is mid sentence. A finished line scrolls up above it, and the bottom line is left blank until the next person speaks.
 
 ```
 [   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
 [   4.68s] mic S2: this is Daniel. Let us see whether the labels come out right.
-   listening ·  12.4 s of audio · 0 dropped
+   … mic S2: see whether the labels come out right
 ```
 
 Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
