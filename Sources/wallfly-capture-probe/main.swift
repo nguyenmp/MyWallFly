@@ -7,18 +7,38 @@ import WallFlyCapture
 // shared clock, and how far each track's own clock has drifted. It can also drop
 // the two tracks on disk as WAV files, so you can listen and check they line up.
 //
-//   swift run wallfly-capture-probe 20              both tracks, 20 seconds
-//   swift run wallfly-capture-probe 20 mic-only     microphone only
-//   swift run wallfly-capture-probe 20 --wav out    also write out/mic.wav and out/system.wav
+//   swift run wallfly-capture-probe 20                both tracks, 20 seconds
+//   swift run wallfly-capture-probe 20 mic-only       microphone only
+//   swift run wallfly-capture-probe 20 --out          also write WAV files here
+//   swift run wallfly-capture-probe 20 --out out      also write them to out/
+//
+// Each run names its files after the moment it started, so two runs never
+// overwrite each other and the two tracks of one run sort together.
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 let runSeconds = arguments.first { Double($0) != nil }.flatMap(Double.init) ?? 20
 let microphoneOnly = arguments.contains("mic-only")
-let wavDirectory = value(after: "--wav", in: arguments)
+// `--out` on its own writes here. `--out <directory>` writes there. No flag, no files.
+let outDirectory = arguments.contains("--out") ? (value(after: "--out", in: arguments) ?? ".") : nil
+// Read the time once, so both tracks carry the same stamp.
+let stamp = runStamp()
 
 func value(after flag: String, in arguments: [String]) -> String? {
     guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
-    return arguments[index + 1]
+    // A following flag means this one took no value: `--out mic-only` is not a
+    // folder named "mic-only". Neither is `--out 20`, so a number counts as no
+    // value too. Runs always put the seconds first, so nothing is lost.
+    let next = arguments[index + 1]
+    return next.hasPrefix("-") || next == "mic-only" || Double(next) != nil ? nil : next
+}
+
+/// The moment this run started, as ISO 8601 in UTC, with dashes in place of the
+/// colons. Finder shows a colon in a file name as a slash, so keep it out.
+func runStamp(_ date: Date = Date()) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.string(from: date).replacingOccurrences(of: ":", with: "-")
 }
 
 func secs(_ value: Double?) -> String {
@@ -114,15 +134,19 @@ for trackStats in stats.tracks {
 }
 print("video frames captured and thrown away: \(stats.discardedVideoFrames)")
 
-if let wavDirectory {
+if let outDirectory {
     let (_, audio) = await collector.summary()
-    let directory = URL(fileURLWithPath: wavDirectory, isDirectory: true)
+    let directory = URL(fileURLWithPath: outDirectory, isDirectory: true)
+    print("")
+    print("writing WAV files to \(directory.path)")
     do {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for (track, pcm) in audio {
-            let url = directory.appendingPathComponent("\(track.rawValue).wav")
+        // Walk the tracks in a fixed order, so the paths always print the same way.
+        for track in AudioTrack.allCases {
+            guard let pcm = audio[track] else { continue }
+            let url = directory.appendingPathComponent("wallfly-\(stamp)-\(track.rawValue).wav")
             try wav(from: pcm).write(to: url)
-            print("wrote \(url.path) — \(pcm.count / CaptureFormat.bytesPerSecond) s")
+            print("  \(url.path) — \(pcm.count / CaptureFormat.bytesPerSecond) s")
         }
     } catch {
         print("Could not write the WAV files: \(error.localizedDescription)")

@@ -11,8 +11,18 @@ The capture helper opens both tracks and hands the rest of the app 16 kHz mono P
 ```sh
 swift run wallfly-capture-probe 20              # both tracks, 20 seconds
 swift run wallfly-capture-probe 20 mic-only     # microphone only, no Screen Recording needed
-swift run wallfly-capture-probe 20 --wav out    # also write out/mic.wav and out/system.wav
+swift run wallfly-capture-probe 20 --out        # also write WAV files here
+swift run wallfly-capture-probe 20 --out out    # also write them to out/
 ```
+
+`--out` on its own writes to the folder you run from. With a folder after it, it writes there. Each run names its files after the moment it started, so runs never overwrite each other and the two tracks of one run sort side by side:
+
+```
+out/wallfly-2026-10-01T20-30-46Z-mic.wav
+out/wallfly-2026-10-01T20-30-46Z-system.wav
+```
+
+It prints every path it writes.
 
 Speak, and play something out loud, so both tracks see audio. The microphone needs Microphone approval and system audio needs Screen Recording approval. Nothing can grant either one from a script: a person has to click the prompt once.
 
