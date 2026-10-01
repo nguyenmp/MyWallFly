@@ -20,5 +20,6 @@ DerivedData/
 # Local recordings and databases
 audio/
 recordings/
+*.wav
 *.sqlite
 *.sqlite3

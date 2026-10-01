@@ -2,7 +2,21 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: design stage. No code yet.** Everything below is a decision, a reason, or an open question.
+**Status: the capture helper works. The rest of the app is not built yet.** Everything below is a decision, a reason, or an open question.
+
+## Try it now
+
+The capture helper opens both tracks and hands the rest of the app 16 kHz mono PCM, along with where each track started. Run it and read the numbers:
+
+```sh
+swift run wallfly-capture-probe 20              # both tracks, 20 seconds
+swift run wallfly-capture-probe 20 mic-only     # microphone only, no Screen Recording needed
+swift run wallfly-capture-probe 20 --wav out    # also write out/mic.wav and out/system.wav
+```
+
+Speak, and play something out loud, so both tracks see audio. The microphone needs Microphone approval and system audio needs Screen Recording approval. Nothing can grant either one from a script: a person has to click the prompt once.
+
+The library lives in `Sources/WallFlyCapture`, the command line check in `Sources/wallfly-capture-probe`.
 
 ## What it does
 
@@ -74,27 +88,29 @@ correction (meeting_id, kind, start_ms, end_ms, value, made_at)
 - **Echo handling** for when the user is on speakers rather than headphones.
 - **Named speakers.** OpenAI's diarize model takes a reference clip of each person, which is the closest thing to naming speakers we have found. Check whether Speechmatics sells the same.
 
-## Next step
+## Where we are
 
-Step 1 is done. Both passes work on a real meeting. The capture spike then answered the riskiest questions, so the real capture helper is next.
+The provider test is done. Both passes work on a real meeting. The capture spike answered the riskiest questions, and the real capture helper is now built and running. It opens the microphone and the system audio as two tracks and hands the rest of the app 16 kHz mono PCM, with the start offset of each track.
 
-What the spike found on real hardware:
+What the spike and the helper found on real hardware:
 
-- Both tracks work. The mic arrives at 16 kHz mono, the format we want, with no conversion.
-- System audio arrives at 48 kHz stereo. It needs a mix down to mono and a drop to 16 kHz.
-- The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run.
+- Both tracks work. The mic arrives at 16 kHz mono 16-bit, the format we want, with no conversion.
+- System audio arrives at 48 kHz stereo, 32-bit float, one array per channel. It needs a mix down to mono and a drop to 16 kHz.
+- The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run. We measured 80 to 90 ms between the two tracks on every run.
 - A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
 
-Next:
+## Next step
 
-1. Build the Swift capture helper. It captures the microphone and the system audio as two tracks, then sends 16 kHz mono PCM to the rest of the app with the start offset of each track.
-2. Run the spike for ten minutes and see whether the two clocks drift apart over a long meeting.
+1. Run the helper for ten minutes or longer and see whether the two clocks drift apart over a long meeting. Short runs show almost no drift: under 40 ms at the end of a five second run.
+2. Send the frames to Speechmatics. The helper stops at the edge of the app, so nothing talks to a provider yet.
 3. Two quick checks: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
 
-The spike lives in `spike/capture-offset`. It is temporary. When the real helper works, copy the spike's settings and its permission code across, then delete the whole folder. One copy of that code, in one place, or the two will drift apart and you will fix the same bug twice.
+The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
 
 ## Traps
 
+- **A muted output gives silent system audio, and it looks healthy.** ScreenCaptureKit taps the sound after the volume and mute stage. With the output muted, the system track records exact zeros: buffers arrive on time, at the right size, carrying nothing. Check the mute state before you believe a silent track, and before you blame your own code. This cost us an hour.
+- **Read the audio the way the system means it, not the way it reads.** `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer` returns -12737, "array too small", for both tracks here, no matter how much room you offer. Copy with `CMSampleBufferCopyPCMDataIntoAudioBufferList` instead and mix down yourself. Also check the real format rather than trusting it: the microphone sends 16 kHz mono 16-bit, and system audio sends 48 kHz stereo 32-bit float, one array per channel.
 - **ScreenCaptureKit has no audio-only mode.** A small video stream always runs next to the audio. Set it to 2x2 pixels at one frame per second, and throw the frames away.
 - **macOS permissions.** System audio needs Screen Recording approval, and the microphone needs its own. Someone must click each prompt once; there is no way to grant them from a script. Check the permission live rather than from a saved flag, because a user can revoke it at any time.
 - **The two tracks do not line up.** They start at different moments and drift apart. Keep both on one clock and record each offset, or the speaker labels land on the wrong words.
