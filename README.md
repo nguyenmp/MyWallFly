@@ -2,7 +2,7 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: the capture helper works. The rest of the app is not built yet.** Everything below is a decision, a reason, or an open question.
+**Status: capture works, and audio comes back from Speechmatics as a labelled transcript. Nothing is stored or shown in a page yet.** Everything below is a decision, a reason, or an open question.
 
 ## Try it now
 
@@ -27,6 +27,84 @@ It prints every path it writes.
 Speak, and play something out loud, so both tracks see audio. The microphone needs Microphone approval and system audio needs Screen Recording approval. Nothing can grant either one from a script: a person has to click the prompt once.
 
 The library lives in `Sources/WallFlyCapture`, the command line check in `Sources/wallfly-capture-probe`.
+
+### Transcribe a meeting
+
+`Sources/WallFlyTranscribe` is the Speechmatics client, and `Sources/wallfly-transcribe` runs it. Copy `.env.example` to `.env`, put your key in it, then:
+
+```sh
+swift run wallfly-transcribe --check         # open a stream and stop: tests the key
+swift run wallfly-transcribe                 # listen until you press Ctrl-C
+swift run wallfly-transcribe 60              # stop by itself after 60 seconds
+swift run wallfly-transcribe mic-only        # microphone only, one stream
+swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
+swift run wallfly-transcribe --out notes.txt # write to a file to watch with tail -f
+swift run wallfly-transcribe --final-only    # do not follow the words being spoken
+swift run wallfly-transcribe 60 --verbose    # also log every message from the service
+```
+
+Lines appear as people talk. Nothing waits for the meeting to end.
+
+One line at the bottom of the terminal shows the words so far while someone is mid sentence. A finished line scrolls up above it, and the bottom line is left blank until the next person speaks.
+
+```
+[   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
+[   4.68s] mic S2: this is Daniel. Let us see whether the labels come out right.
+   … mic S2: see whether the labels come out right
+```
+
+Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
+
+`--partials` adds the words in progress when the output is not a terminal, for example in a log.
+
+### Writing to a file
+
+`--out notes.txt` keeps the transcript in a file. The file always holds it as it stands: every settled line, plus one open line for the words still being spoken.
+
+```
+[   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
+   … mic S2: Let us see whether the labels come
+```
+
+The open line, the one with the `…`, is rewritten in place on every update. So it follows the words as they change and is never half a sentence behind. Nothing is appended for it, and the file does not grow while one sentence is being spoken.
+
+When the speaker pauses, that line settles: it takes its timestamp, and a new open line starts below it.
+
+The open line only grows. The service trims the words it has already committed off the front of each partial, so a partial on its own loses the start of a sentence: a long sentence arrives as "Hello. This is Samantha", then "This is Samantha speaking", then "Samantha speaking. We are". The settled words are kept and only the new ones are added, using the word times to tell them apart. Nothing is lost and nothing repeats.
+
+One thing does look unsettled: the speaker label can flip between two similar voices while a sentence is still being decided. The settled lines are the ones to trust.
+
+`--final-only` writes settled lines only, and waits for each pause before anything appears.
+
+Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. The in-place update needs a real file to seek in, so write to one with `--out`. If you redirect standard output instead, lines are added as they settle:
+
+```sh
+swift run wallfly-transcribe > notes.txt      # added lines, no in-place update
+swift run wallfly-transcribe --out notes.txt  # one open line, rewritten in place
+```
+
+`--file` reads any format the system can decode, converts it to 16 kHz mono, and sends it at real time. It is the fastest way to prove the provider path: you get a transcript without a meeting, a microphone, or a permission prompt. To make a clip with two voices:
+
+```sh
+say -v Samantha -o /tmp/a.aiff "Hello, this is Samantha speaking."
+say -v Daniel -o /tmp/b.aiff "And this is Daniel."
+ffmpeg -y -i /tmp/a.aiff -i /tmp/b.aiff -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1" -ar 16000 -ac 1 -c:a pcm_s16le /tmp/two.wav
+swift run wallfly-transcribe --file /tmp/two.wav
+```
+
+The key is your own. The app never holds one and never pays for your audio. Never paste a key into a chat, an issue, or a log: treat any key that has been pasted as public and rotate it.
+
+Each track goes to its own stream, so the service diarizes each input on its own. Before any real audio, the pipe sends silence at the front of whichever track started later. That puts both streams on the meeting clock, so a timestamp from the service is already a meeting timestamp.
+
+Two streams at once uses the whole Speechmatics trial quota, which allows two. Mixing the tracks instead is still an open question below.
+
+### Run the checks
+
+```sh
+swift test
+```
+
+The tests need no key and no network. They cover reading a `.env` file, the start message, every message the service sends back, and the rules that join words into transcript lines. They use `swift-testing`, which ships with the toolchain, so a full Xcode install is not needed.
 
 ## What it does
 
@@ -109,11 +187,27 @@ What the spike and the helper found on real hardware:
 - The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run. We measured 80 to 90 ms between the two tracks on every run.
 - A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
 
+The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one real-time stream per track, sends the audio, and turns the replies into transcript lines with speaker labels. It lines the two streams up on the meeting clock by sending silence at the front of whichever track began later. The `wallfly-transcribe` command runs the whole thing.
+
+What is proven:
+
+- 37 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, and the rules that join words into lines.
+- A bad key comes back as "Not Authorized" in about a second, not as a hang.
+- Two voices replayed through the provider came back as two lines, labelled S1 and S2, with the words right.
+- A live run on both tracks reaches the provider and ends cleanly: 1841 buffers, none dropped. Ctrl-C stops it in about a third of a second and the last words still arrive.
+
+What is not:
+
+- No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
+- The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
+- Nothing is stored and no page shows the transcript. The live speaker labels are not yet replaced by the end-of-meeting batch pass; that pass is not written.
+
 ## Next step
 
-1. Run the helper for ten minutes or longer and see whether the two clocks drift apart over a long meeting. Short runs show almost no drift: under 40 ms at the end of a five second run.
-2. Send the frames to Speechmatics. The helper stops at the edge of the app, so nothing talks to a provider yet.
-3. Two quick checks: confirm the 6 speakers against the room you remember, and note what Speechmatics costs per minute.
+1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer. That answers two open questions at once: does a long run drift, and does the transcript match the room.
+2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
+3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
+4. Store the transcript in SQLite, then add the second pass that replaces the live speaker labels with the tighter batch result.
 
 The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
 
@@ -130,6 +224,11 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **Sending audio to a provider is a bigger deal than storing it yourself.** The recording leaves the machine, so the consent question is sharper. Depending on where your users are, recording other people may require all-party consent.
 - **Speakers cause echo.** System audio leaks into the microphone, and the same words show up twice.
 - **Far-field audio is the hardest case.** Room echo and people talking over each other hurt diarization most. Published accuracy numbers will not match your room.
+- **Speechmatics reads text frames as control messages and binary frames as audio.** Send the start message as bytes and the service answers "Unable to process the audio binary message, the recognition session handshake was not completed yet". It looks like a key or permission problem and it is neither. `startMessage()` returns a `String` now, so the mistake does not compile.
+- **The end message must name the last audio chunk.** Bare `{"message":"EndOfStream"}` is rejected by the service schema, and the service then drops the words it was still holding: every meeting loses its last few seconds. The reply is easy to miss, because the words simply never arrive. Send `last_seq_no`, the count of audio frames sent, which the service echoes in every `AudioAdded`.
+- **A final transcript message is not a whole line.** The service commits a final every second or two, so one sentence arrives as several of them. Joining them at the `EndOfUtterance` message, and when the speaker changes, gives one line per turn. Without that the transcript is a column of two word fragments.
+- **Wait for `EndOfTranscript`, not for the socket to close.** The service sends everything it has, then keeps the socket open. Waiting for the close made Ctrl-C take five seconds instead of a third of one. Treat `EndOfTranscript` as the end of the meeting.
+- **A Command Line Tools install can fail to load the swift-testing macros.** With no full Xcode, `swift test` sometimes stopped with "plugin for module 'TestingMacros' not found". That is a toolchain problem, not a test failure, and it hit about a third of runs. `Package.swift` now points the compiler straight at the plugin directory, which fixed it. If it comes back, check that the directory still exists.
 
 ## Considered, not using
 

@@ -23,3 +23,7 @@ recordings/
 *.wav
 *.sqlite
 *.sqlite3
+
+# Transcript output. It holds other people talking, so keep it out of the repo.
+notes*.txt
+transcript*.txt
