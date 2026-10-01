@@ -10,6 +10,7 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe 60               stop by itself after 60 seconds
 //   swift run wallfly-transcribe mic-only         microphone only, one stream
 //   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
+//   swift run wallfly-transcribe --out notes.txt  write lines to a file to watch with tail -f
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
 //
@@ -35,11 +36,22 @@ func value(after flag: String, in arguments: [String]) -> String? {
 
 /// Writes straight through, so a line shows up the moment it is made. `print`
 /// sits in a buffer when the output is a pipe, which hides a live transcript.
+///
+/// Transcript lines go to standard output, so `> notes.txt` works and a pipe
+/// gets nothing but the transcript. Everything about the run goes to standard
+/// error, so it never lands in the middle of a transcript.
 enum Console {
-    static func out(_ text: String) {
+    /// A finished transcript line, with no file set.
+    static func line(_ text: String) {
         FileHandle.standardOutput.write(Data((text + "\n").utf8))
     }
 
+    /// Something about the run: settings, totals, warnings.
+    static func note(_ text: String) {
+        FileHandle.standardError.write(Data((text + "\n").utf8))
+    }
+
+    /// Part of a line that is already open, so no newline is added.
     static func err(_ text: String) {
         FileHandle.standardError.write(Data(text.utf8))
     }
@@ -93,17 +105,17 @@ let interrupt = AsyncStream<Void> { continuation in
 // MARK: - Check the key without holding a meeting
 
 if arguments.contains("--check") {
-    Console.out("Testing the key against \(region.rawValue)…")
+    Console.note("Testing the key against \(region.rawValue)…")
     let client = SpeechmaticsClient(config: providerConfiguration)
     let listener = Task {
         for await event in client.events {
             switch event {
             case .recognising(let id):
-                Console.out("The key works. Speechmatics opened stream \(id).")
+                Console.note("The key works. Speechmatics opened stream \(id).")
             case .failure(let reason):
                 Console.err("Refused: \(reason)\n")
             case .warning(let text):
-                Console.out("Warning: \(text)")
+                Console.note("Warning: \(text)")
             default:
                 break
             }
@@ -119,6 +131,23 @@ if arguments.contains("--check") {
     await client.close()
     _ = await listener.value
     exit(0)
+}
+
+// MARK: - Where the transcript goes
+
+/// Finished lines go to a file when `--out` names one, ready to watch with
+/// `tail -f`. Only finished lines are written, so the file stays a clean
+/// transcript and never shows half a sentence. The live line stays in the
+/// terminal, and the totals still print there at the end.
+var transcriptFile: FileHandle?
+if let outPath = value(after: "--out", in: arguments) {
+    FileManager.default.createFile(atPath: outPath, contents: nil)
+    guard let handle = FileHandle(forWritingAtPath: outPath) else {
+        Console.err("Could not open \(outPath) for writing.\n")
+        exit(1)
+    }
+    transcriptFile = handle
+    Console.note("transcript: \(outPath)   (watch it with: tail -f \(outPath))")
 }
 
 // MARK: - Replay a recording
@@ -138,7 +167,7 @@ if let filePath = value(after: "--file", in: arguments) {
     }
 
     let length = Double(recording.count) * AudioFileSource.chunkSeconds
-    Console.out("Replaying \(filePath) — \(String(format: "%.1f", length)) s through \(region.rawValue)")
+    Console.note("Replaying \(filePath) — \(String(format: "%.1f", length)) s through \(region.rawValue)")
 
     // Feed the frames at real time. The service expects a live pace.
     let stream = AsyncStream<AudioFrame> { continuation in
@@ -156,10 +185,12 @@ if let filePath = value(after: "--file", in: arguments) {
         }
     }
 
-    let printer = SegmentPrinter(showPartials: showPartials, canRedraw: Console.canRedraw)
+    let printer = SegmentPrinter(showPartials: showPartials,
+                                 canRedraw: Console.canRedraw,
+                                 file: transcriptFile)
     var pipe = TranscriptionPipe(config: providerConfiguration, tracks: [.microphone])
     if verbose {
-        pipe.debugLog = { Console.out("  · \($0)") }
+        pipe.debugLog = { Console.note("  · \($0)") }
     }
 
     do {
@@ -168,8 +199,9 @@ if let filePath = value(after: "--file", in: arguments) {
             printer.show(event)
         }
         printer.finishLine()
-        Console.out("")
-        Console.out("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+        Console.note("")
+        Console.note("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+        try? transcriptFile?.close()
     } catch {
         printer.finishLine()
         Console.err("Transcription failed: \(error)\n")
@@ -183,12 +215,12 @@ if let filePath = value(after: "--file", in: arguments) {
 let captureConfiguration: CaptureConfiguration = microphoneOnly ? .microphoneOnly : .default
 let tracks: [AudioTrack] = microphoneOnly ? [.microphone] : AudioTrack.allCases
 
-Console.out("MyWallFly → Speechmatics"
+Console.note("MyWallFly → Speechmatics"
             + (runSeconds.map { " — running for \($0) s" } ?? " — press Ctrl-C to stop"))
-Console.out("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
-Console.out("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
+Console.note("region: \(region.rawValue)   tracks: \(tracks.map(\.rawValue).joined(separator: ", "))")
+Console.note("microphone: \(CapturePermissions.microphoneGranted ? "granted" : "not granted yet")")
 if !microphoneOnly {
-    Console.out("screen recording: \(CapturePermissions.screenRecordingGranted ? "granted" : "not granted yet")")
+    Console.note("screen recording: \(CapturePermissions.screenRecordingGranted ? "granted" : "not granted yet")")
 }
 
 let capture: AudioCapture
@@ -205,21 +237,23 @@ do {
 } catch {
     Console.err("Could not start capture: \(error.localizedDescription)\n")
     if !microphoneOnly && !CapturePermissions.screenRecordingGranted {
-        Console.out("Grant Screen Recording in System Settings, then run again.")
+        Console.note("Grant Screen Recording in System Settings, then run again.")
     }
     exit(1)
 }
 
 for trackStart in start.starts {
     let pad = TranscriptionPipe.leadingSilenceByteCount(offset: trackStart.offset)
-    Console.out("\(trackStart.track.rawValue) started \(String(format: "+%.0f ms", trackStart.offset * 1000)) into the meeting"
+    Console.note("\(trackStart.track.rawValue) started \(String(format: "+%.0f ms", trackStart.offset * 1000)) into the meeting"
                 + (pad > 0 ? " (padding \(pad) bytes of silence)" : ""))
 }
 
-let printer = SegmentPrinter(showPartials: showPartials, canRedraw: Console.canRedraw)
+let printer = SegmentPrinter(showPartials: showPartials,
+                             canRedraw: Console.canRedraw,
+                             file: transcriptFile)
 var pipe = TranscriptionPipe(config: providerConfiguration, tracks: tracks)
 if verbose {
-    pipe.debugLog = { Console.out("  · \($0)") }
+    pipe.debugLog = { Console.note("  · \($0)") }
 }
 
 let runner = Task {
@@ -247,15 +281,16 @@ await capture.stop()
 do {
     let report = try await runner.value
     printer.finishLine()
-    Console.out("")
-    Console.out("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+    Console.note("")
+    Console.note("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
     if let lastError = report.lastError {
-        Console.out("last drop: \(lastError)")
+        Console.note("last drop: \(lastError)")
     }
     for track in capture.stats().tracks {
-        Console.out("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
+        Console.note("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
                     + "\(track.dropped) dropped buffers, drift \(String(format: "%.0f ms", track.drift * 1000))")
     }
+    try? transcriptFile?.close()
 } catch {
     printer.finishLine()
     Console.err("Transcription failed: \(error)\n")
@@ -268,11 +303,13 @@ final class SegmentPrinter: @unchecked Sendable {
     private let lock = NSLock()
     private let showPartials: Bool
     private let canRedraw: Bool
+    private let file: FileHandle?
     private var openLine = false
 
-    init(showPartials: Bool, canRedraw: Bool) {
+    init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil) {
         self.showPartials = showPartials
         self.canRedraw = canRedraw
+        self.file = file
     }
 
     /// Redraws the bottom line. Does nothing when the output is not a terminal,
@@ -294,14 +331,23 @@ final class SegmentPrinter: @unchecked Sendable {
             } else if showPartials {
                 lock.lock(); defer { lock.unlock() }
                 clearLocked()
-                Console.out("   … \(label(for: event)): \(segment.text)")
+                Console.line("   … \(label(for: event)): \(segment.text)")
             }
             return
         }
 
         lock.lock(); defer { lock.unlock() }
         clearLocked()
-        Console.out(line(for: event))
+        write(line(for: event))
+    }
+
+    /// A whole line, written straight through, so `tail -f` sees it at once.
+    private func write(_ text: String) {
+        if let file {
+            file.write(Data((text + "\n").utf8))
+        } else {
+            Console.line(text)
+        }
     }
 
     func finishLine() {

@@ -28,6 +28,7 @@ swift run wallfly-transcribe                 # listen until you press Ctrl-C
 swift run wallfly-transcribe 60              # stop by itself after 60 seconds
 swift run wallfly-transcribe mic-only        # microphone only, one stream
 swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
+swift run wallfly-transcribe --out notes.txt # write lines to a file to watch with tail -f
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
 ```
 
@@ -43,7 +44,19 @@ One line at the bottom of the terminal shows the words so far while someone is m
 
 Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
 
-Wrap it in `--partials` when the output is not a terminal, for example in a log, to get the words as they land.
+`--partials` adds the words in progress when the output is not a terminal, for example in a log.
+
+### Writing to a file
+
+`--out notes.txt` writes finished lines to a file instead of the terminal. Watch it with `tail -f notes.txt`.
+
+The file gets whole lines only, so it never shows half a sentence, and it fills while the meeting runs rather than at the end. A line lands when a speaker pauses; while someone is still talking, the words in progress sit on the terminal line. Expect a gap of a few seconds to a minute between lines, depending on how often people stop talking.
+
+Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. That means this works too:
+
+```sh
+swift run wallfly-transcribe > notes.txt
+```
 
 `--file` reads any format the system can decode, converts it to 16 kHz mono, and sends it at real time. It is the fastest way to prove the provider path: you get a transcript without a meeting, a microphone, or a permission prompt. To make a clip with two voices:
 
