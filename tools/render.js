@@ -76,12 +76,12 @@ function main(){
     track: t.track, label: t.label, t0: t.t0, t1: t.t1, text: t.text
   }));
 
-  const page = path.join(__dirname, 'edit-ui.html');
+  const page = path.join(__dirname, '..', 'Sources', 'WallFlyTranscribe', 'Web', 'transcript.html');
   const template = fs.readFileSync(page, 'utf8');
   const marker = 'window.WALLFLY_DATA = ';
   const from = template.indexOf(marker);
   const to = from < 0 ? -1 : template.indexOf('\n};\n</script>', from);
-  if (from < 0 || to < 0) throw new Error('cannot find the data block in edit-ui.html');
+  if (from < 0 || to < 0) throw new Error('cannot find the data block in transcript.html');
 
   const out = process.argv[3]
     || path.join(path.dirname(path.resolve(source)), data.label + '-page.html');

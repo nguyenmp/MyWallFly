@@ -30,7 +30,10 @@ let package = Package(
         .target(
             name: "WallFlyTranscribe",
             dependencies: ["WallFlyCapture"],
-            path: "Sources/WallFlyTranscribe"
+            path: "Sources/WallFlyTranscribe",
+            // The page the live transcript is shown in. It ships next to the
+            // code, so a run has no separate file to install.
+            resources: [.copy("Web/transcript.html")]
         ),
         // A live view of what capture hears.
         .executableTarget(
