@@ -229,6 +229,11 @@ var bannerText = null;
 // True once the run has handed back the changes it kept, so a reconnect cannot
 // undo an edit made a moment ago.
 var editsLoaded = false;
+// A live run redraws the page as lines arrive, which would throw away a drag or
+// a selection in progress. While the reader is pressing the mouse or holding a
+// selection, the redraw waits until they let go.
+var interacting = false;
+var pendingRender = false;
 
 buildWords();
 
@@ -451,6 +456,22 @@ function leading(ws, n){
 function byId(id){ return document.getElementById(id); }
 
 /* ---------- rendering ---------- */
+
+// True when a redraw would not disturb what the reader is doing.
+function canRenderNow(){
+  if (interacting) return false;
+  var s = window.getSelection();
+  return !(s && !s.isCollapsed);
+}
+
+// Lets go of a redraw that was held back while the reader was busy. It waits for
+// the current task to finish first, so a click lands on the element it started on
+// and not on the copy that replaced it.
+function renderWhenFree(){
+  setTimeout(function(){
+    if (pendingRender && canRenderNow()){ pendingRender = false; render(); }
+  }, 0);
+}
 
 function render(){
   // A live run keeps the newest words in view, unless the reader has scrolled
@@ -870,8 +891,21 @@ byId('transcript').addEventListener('mouseup', function(e){
 });
 
 document.addEventListener('mousedown', function(e){
+  interacting = true;
   if (e.target.closest && (e.target.closest('#pop') || e.target.closest('.spk') || e.target.closest('.w'))) return;
   hidePop();
+});
+// The reader has let go. A redraw that was waiting can happen now.
+document.addEventListener('mouseup', function(){
+  interacting = false;
+  renderWhenFree();
+});
+// A drag is the same kind of gesture: a redraw in the middle of it loses the
+// element the reader is dragging.
+document.addEventListener('dragstart', function(){ interacting = true; });
+document.addEventListener('dragend', function(){
+  interacting = false;
+  renderWhenFree();
 });
 
 byId('pop').addEventListener('click', function(e){
@@ -1064,6 +1098,8 @@ function connectLive(){
   function refresh(){
     buildWords();
     if (editingLine || renaming) return;
+    // A redraw in the middle of a drag or a selection would throw it away.
+    if (!canRenderNow()){ pendingRender = true; return; }
     render();
   }
 
