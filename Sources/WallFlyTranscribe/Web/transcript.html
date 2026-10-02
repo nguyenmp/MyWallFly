@@ -601,7 +601,11 @@ function renderTranscript(ps){
 
   // A meeting that has ended has no live line, so there is nothing to draw.
   // Each track has its own, because the mic and the system audio are heard apart.
-  OPEN_LINES.forEach(function(line){
+  // They keep the same order every time, so the two live lines never trade places
+  // under the reader while both tracks are talking.
+  OPEN_LINES.slice().sort(function(a, b){
+    return TRACKS.indexOf(a.track) - TRACKS.indexOf(b.track);
+  }).forEach(function(line){
     html += '<div class="block open">'
           + '<div class="hdr"><span class="time">[&hellip;]</span>'
           + '<span class="tb ' + tc(line.track) + '">' + tc(line.track) + '</span>'
