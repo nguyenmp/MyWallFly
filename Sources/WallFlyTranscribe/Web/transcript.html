@@ -606,11 +606,21 @@ function renderTranscript(ps){
   OPEN_LINES.slice().sort(function(a, b){
     return TRACKS.indexOf(a.track) - TRACKS.indexOf(b.track);
   }).forEach(function(line){
+    // The live line has no settled words, so its words cannot be handed to
+    // another speaker yet. The name can still be set, which is what a reader
+    // wants while someone is talking.
+    var canon = identity(line.track, line.label);
     html += '<div class="block open">'
           + '<div class="hdr"><span class="time">[&hellip;]</span>'
-          + '<span class="tb ' + tc(line.track) + '">' + tc(line.track) + '</span>'
-          + '<span class="spk" style="cursor:default">' + esc(nameOf(line.track, line.label)) + '</span>'
-          + '<span class="livetag">live, not settled</span></div>'
+          + '<span class="tb ' + tc(line.track) + '">' + tc(line.track) + '</span>';
+    if (labelFor(line.track, canon) !== null){
+      html += '<button class="spk live" data-track="' + esc(line.track)
+            + '" data-canon="' + esc(canon) + '" title="Name this speaker">'
+            + esc(nameOf(line.track, line.label)) + '</button>';
+    } else {
+      html += '<span class="spk" style="cursor:default">' + esc(nameOf(line.track, line.label)) + '</span>';
+    }
+    html += '<span class="livetag">live, not settled</span></div>'
           + '<div class="body">' + esc(line.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
           + '</div>';
   });
@@ -805,6 +815,14 @@ function lineKey(track, t0, t1){ return track + '|' + t0 + '|' + t1; }
 /* ---------- events ---------- */
 
 byId('transcript').addEventListener('click', function(e){
+  // A live line cannot hand its words to another speaker yet, but its speaker
+  // can be named.
+  var live = e.target.closest ? e.target.closest('.spk.live') : null;
+  if (live){
+    renaming = {track: live.getAttribute('data-track'), canon: live.getAttribute('data-canon')};
+    render();
+    return;
+  }
   var pen = e.target.closest ? e.target.closest('.pen.ln') : null;
   if (pen){
     var track = pen.getAttribute('data-track');
@@ -944,7 +962,7 @@ function commitRename(value){
   renaming = null;
   if (!r) return;
   value = (value || '').trim();
-  var label = labelFor(r.track, r.canon);
+  var label = labelFor(r.track, r.canon) || r.canon;
   if (!value || !label || value === nameOf(r.track, label)){ render(); return; }
   pushRevision({n: nextN++, kind:'name', track:r.track, label:label,
                 anchor:firstSight(r.track, label), value:value});
