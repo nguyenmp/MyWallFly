@@ -214,7 +214,11 @@ let pageBanner = runFolder?.lastPathComponent
     ?? URL(fileURLWithPath: transcriptPath).deletingPathExtension().lastPathComponent
 var live: LivePage?
 do {
-    let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort)
+    // Keep the page's changes beside the transcript, so a reload or a crash does
+    // not lose them. A run with a plain transcript file and no folder keeps them
+    // in memory only.
+    let editsURL = runFolder?.appendingPathComponent("edits.json")
+    let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort, editsURL: editsURL)
     live = page
     Console.note("page:       \(url.absoluteString)")
     if !arguments.contains("--no-open") {

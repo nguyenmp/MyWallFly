@@ -87,6 +87,9 @@ public final class LivePageServer: @unchecked Sendable {
         var turns: [LiveTurn]
         var open: [LiveOpenLine]
         var ended: Bool
+        /// The page's list of changes, kept exactly as the page wrote it. The page
+        /// rebuilds the transcript from this, so it is the whole edit state.
+        var edits: String? = nil
     }
 
     private struct OpenPayload: Codable {
@@ -114,6 +117,9 @@ public final class LivePageServer: @unchecked Sendable {
     private let pageHTML: Data
     private let banner: String?
     private let requestedPort: UInt16
+    /// Where the page's changes are kept between page loads. Nil when the run has
+    /// no folder, and the changes then last only as long as the run itself.
+    private let editsURL: URL?
     /// Made on first use, so it lands on the same queue as everything else.
     private lazy var keepAlive = DispatchSource.makeTimerSource(queue: queue)
     private let encoder = JSONEncoder()
@@ -122,10 +128,15 @@ public final class LivePageServer: @unchecked Sendable {
     private var clients: [UUID: NWConnection] = [:]
     private var state = PageState(turns: [], open: [], ended: false)
 
-    public init(banner: String? = nil, port: UInt16 = 0) throws {
+    public init(banner: String? = nil, port: UInt16 = 0, editsURL: URL? = nil) throws {
         self.pageHTML = try TranscriptPage.html()
         self.banner = banner
         self.requestedPort = port
+        self.editsURL = editsURL
+        // A run in this folder has been here before. Pick up the changes it left.
+        if let editsURL, let saved = try? Data(contentsOf: editsURL) {
+            self.state.edits = String(decoding: saved, as: UTF8.self)
+        }
     }
 
     /// Starts listening on 127.0.0.1 and returns the address of the page.
@@ -220,6 +231,21 @@ public final class LivePageServer: @unchecked Sendable {
         }
     }
 
+    /// Keeps the page's list of changes. The page sends the whole list after every
+    /// edit, so the last one wins and nothing needs merging.
+    ///
+    /// With a folder the list goes in a file beside the transcript: it survives a
+    /// reload and a crash, and the end-of-meeting pass can read it. Without a
+    /// folder it stays in memory, so a reload still finds it while the run lasts.
+    public func saveEdits(_ json: String) {
+        queue.async { [self] in
+            state.edits = json
+            guard let editsURL else { return }
+            // Write the whole file at once, so a crash cannot leave half of it.
+            try? Data(json.utf8).write(to: editsURL, options: .atomic)
+        }
+    }
+
     // MARK: - The socket
 
     private func accept(_ connection: NWConnection) {
@@ -237,13 +263,15 @@ public final class LivePageServer: @unchecked Sendable {
     }
 
     /// Reads until the blank line that ends the request headers, then routes it.
+    /// Whatever arrived after the headers is the start of the body.
     private func readRequest(_ connection: NWConnection, id: UUID, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { connection.cancel(); return }
             var buffer = buffer
             if let data { buffer.append(data) }
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                route(connection, head: String(decoding: buffer[..<end.lowerBound], as: UTF8.self))
+                let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
+                route(connection, head: head, body: Data(buffer[end.upperBound...]))
                 return
             }
             if isComplete || error != nil || buffer.count > 64 * 1024 {
@@ -254,30 +282,57 @@ public final class LivePageServer: @unchecked Sendable {
         }
     }
 
-    private func route(_ connection: NWConnection, head: String) {
-        let line = head.split(separator: "\r\n", maxSplits: 1, omittingEmptySubsequences: false)
-            .first.map(String.init) ?? ""
-        let parts = line.split(separator: " ")
+    private func route(_ connection: NWConnection, head: String, body: Data) {
+        let lines = head.split(separator: "\r\n", omittingEmptySubsequences: false).map(String.init)
+        let requestLine = lines.first ?? ""
+        let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? ""
         let target = parts.count > 1 ? String(parts[1]) : "/"
         let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? "/"
+        let contentLength = lines.dropFirst()
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.split(separator: ":", maxSplits: 1).last?
+                          .trimmingCharacters(in: .whitespaces) ?? "") } ?? 0
 
-        guard method == "GET" || method == "HEAD" else {
-            respond(connection, status: "405 Method Not Allowed", type: "text/plain; charset=utf-8",
-                    body: Data("Only GET is served.\n".utf8))
-            return
-        }
-
-        switch path {
-        case "/", "/index.html":
+        switch (method, path) {
+        case ("GET", "/"), ("GET", "/index.html"), ("HEAD", "/"), ("HEAD", "/index.html"):
             respond(connection, status: "200 OK", type: "text/html; charset=utf-8", body: page())
-        case "/events":
+        case ("GET", "/events"):
             openStream(connection)
-        case "/favicon.ico":
+        case ("GET", "/favicon.ico"), ("HEAD", "/favicon.ico"):
             respond(connection, status: "204 No Content", type: "text/plain", body: Data())
+        case ("POST", "/edits"):
+            // The page sends the whole list of changes after every edit.
+            readBody(connection, have: body, need: contentLength) { [weak self] full in
+                self?.saveEdits(String(decoding: full, as: UTF8.self))
+                self?.respond(connection, status: "204 No Content",
+                              type: "text/plain; charset=utf-8", body: Data())
+            }
         default:
-            respond(connection, status: "404 Not Found", type: "text/plain; charset=utf-8",
-                    body: Data("No page at \(path).\n".utf8))
+            if method == "GET" || method == "HEAD" || method == "POST" {
+                respond(connection, status: "404 Not Found", type: "text/plain; charset=utf-8",
+                        body: Data("No page at \(path).\n".utf8))
+            } else {
+                respond(connection, status: "405 Method Not Allowed", type: "text/plain; charset=utf-8",
+                        body: Data("Only GET, HEAD, and POST /edits are served.\n".utf8))
+            }
+        }
+    }
+
+    /// Reads the rest of a request body when the first read did not carry all of it.
+    private func readBody(_ connection: NWConnection, have: Data, need: Int,
+                          then done: @escaping (Data) -> Void) {
+        var have = have
+        guard have.count < need else { done(Data(have.prefix(need))); return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+            guard let self else { connection.cancel(); return }
+            if let data { have.append(data) }
+            if have.count >= need {
+                done(Data(have.prefix(need)))
+                return
+            }
+            if isComplete || error != nil { connection.cancel(); return }
+            self.readBody(connection, have: have, need: need, then: done)
         }
     }
 
@@ -387,8 +442,9 @@ public final class LivePage: @unchecked Sendable {
     }
 
     /// Loads the page and starts the server. Returns the address to open.
-    public static func start(banner: String? = nil, port: UInt16 = 0) throws -> (page: LivePage, url: URL) {
-        let server = try LivePageServer(banner: banner, port: port)
+    public static func start(banner: String? = nil, port: UInt16 = 0,
+                             editsURL: URL? = nil) throws -> (page: LivePage, url: URL) {
+        let server = try LivePageServer(banner: banner, port: port, editsURL: editsURL)
         let url = try server.start()
         return (LivePage(server: server), url)
     }

@@ -294,7 +294,7 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- The page shows the transcript live, but nothing is in a database yet, and changes made on the page are not saved. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 

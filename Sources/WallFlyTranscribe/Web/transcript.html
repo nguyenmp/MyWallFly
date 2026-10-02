@@ -226,6 +226,9 @@ var renaming = null;
 var flashRange = null;
 var scrollTarget = null;
 var bannerText = null;
+// True once the run has handed back the changes it kept, so a reconnect cannot
+// undo an edit made a moment ago.
+var editsLoaded = false;
 
 buildWords();
 
@@ -730,12 +733,28 @@ function selectionToRange(){
 
 /* ---------- edits ---------- */
 
+// Tells the run about a change, so it is not lost. The run writes the whole list
+// with the meeting and hands it back when the page reloads.
+function saveEdits(){
+  if (!LIVE) return;
+  try {
+    fetch('/edits', {method:'POST', headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify(revisions)});
+  } catch (e) { /* the run is gone; the page still works */ }
+}
+
+// Every change goes through here, so none is forgotten.
+function pushRevision(r){
+  revisions.push(r);
+  saveEdits();
+}
+
 function addSpeaker(track, t0, t1, label){
   if (t1 - t0 < 1) return;
   if (labelAt(track,(t0+t1)/2) === label && !revisions.some(function(r){
         return r.kind==='speaker' && r.track===track && Math.abs(r.t0-t0)<1 && Math.abs(r.t1-t1)<1;
       })) return;
-  revisions.push({n: nextN++, kind:'speaker', track:track, t0:t0, t1:t1, value: refOf(track,label)});
+  pushRevision({n: nextN++, kind:'speaker', track:track, t0:t0, t1:t1, value: refOf(track,label)});
   flashRange = {t0:t0, t1:t1};
   render();
 }
@@ -745,7 +764,7 @@ function addSpeaker(track, t0, t1, label){
 function setLineText(track, t0, t1, value){
   value = (value || '').replace(/\s+/g, ' ').trim();
   if (!value || value === rangeText(track, t0, t1)) return;
-  revisions.push({n: nextN++, kind:'words', track: track, t0: t0, t1: t1, value: value});
+  pushRevision({n: nextN++, kind:'words', track: track, t0: t0, t1: t1, value: value});
   render();
 }
 
@@ -882,8 +901,8 @@ function commitRename(value){
   value = (value || '').trim();
   var label = labelFor(r.track, r.canon);
   if (!value || !label || value === nameOf(r.track, label)){ render(); return; }
-  revisions.push({n: nextN++, kind:'name', track:r.track, label:label,
-                  anchor:firstSight(r.track, label), value:value});
+  pushRevision({n: nextN++, kind:'name', track:r.track, label:label,
+                anchor:firstSight(r.track, label), value:value});
   render();
 }
 
@@ -955,7 +974,7 @@ byId('bar').addEventListener('drop', function(e){
     if (identity(t.track,t.label)===fromCanon) dropLabel = t.label;
   });
   if (!keepLabel || !dropLabel) return;
-  revisions.push({
+  pushRevision({
     n: nextN++, kind:'merge', track:toTrack,
     keep: refOf(toTrack, keepLabel), drop: refOf(toTrack, dropLabel)
   });
@@ -980,6 +999,7 @@ byId('panel').addEventListener('click', function(e){
 // rule the README sets: replay the list without that revision.
 function undoRevision(n){
   revisions = revisions.filter(function(r){ return r.n !== n; });
+  saveEdits();
   render();
 }
 
@@ -1001,6 +1021,7 @@ function runBatch(){
     return {track:t.track, label:rot[labels.indexOf(t.label)], t0:t.t0, t1:t.t1, text:t.text};
   });
   revisions.forEach(function(r){ if (r.kind==='name') r.rechecked = true; });
+  saveEdits();
   bannerText = 'The end-of-meeting pass re-labelled every speaker, so “S1” and “S2” now mean different voices. '
              + 'Your names, merges, and reassignments stayed with the voice they were set on, matched by the '
              + 'time that voice first spoke. Check any name marked with ↻.';
@@ -1049,6 +1070,19 @@ function connectLive(){
     var data = JSON.parse(e.data);
     turns = (data.turns || []).map(function(t){ return t; });
     OPEN_LINES = data.ended ? [] : (data.open || []).map(function(o){ return o; });
+    // The run keeps the changes made before a reload. Take them once, so a
+    // reconnect cannot undo an edit made a moment ago.
+    if (!editsLoaded){
+      editsLoaded = true;
+      try {
+        var kept = JSON.parse(data.edits || '[]');
+        if (Object.prototype.toString.call(kept) === '[object Array]' && kept.length){
+          revisions = kept;
+          nextN = 1;
+          revisions.forEach(function(r){ if (r && r.n >= nextN) nextN = r.n + 1; });
+        }
+      } catch (err) { /* a damaged list must not stop the page */ }
+    }
     refresh();
   });
 
@@ -1089,7 +1123,7 @@ if (LIVE){
   var liveLabel = LIVE.label || 'this run';
   document.title = 'MyWallFly — ' + liveLabel;
   byId('subtitle').textContent = 'Live. ' + liveLabel
-    + '. Lines land here as people speak. Changes you make on this page are not saved yet.';
+    + '. Lines land here as people speak. Your changes are kept with the run.';
   // Both buttons belong to the mockup: one wipes the transcript, the other
   // scrambles the speaker names.
   byId('reset').style.display = 'none';

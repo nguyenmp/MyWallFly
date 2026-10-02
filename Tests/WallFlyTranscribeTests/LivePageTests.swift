@@ -57,6 +57,39 @@ struct LivePageTests {
         #expect(open.contains("event: open"))
         #expect(open.contains("Still talking"))
     }
+    @Test("the run keeps the page's changes, and hands them back after a reload")
+    func keepsEdits() async throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wallfly-edits-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let (page, url) = try LivePage.start(banner: "test run", editsURL: file)
+        defer { page.stop() }
+
+        // A change the page makes.
+        let edits = "[{\"n\":1,\"kind\":\"name\",\"track\":\"mic\",\"value\":\"Sam\"}]"
+        var request = URLRequest(url: url.appendingPathComponent("edits"))
+        request.httpMethod = "POST"
+        request.httpBody = Data(edits.utf8)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 204)
+
+        // The run wrote the list beside the transcript, so a crash keeps it. The
+        // write happens on the server's queue, so give it a moment.
+        var written: String?
+        for _ in 0..<50 {
+            if let text = try? String(contentsOf: file, encoding: .utf8) { written = text; break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(written == edits)
+
+        // A page that opens later gets the changes back.
+        let socket = try Socket(port: UInt16(url.port ?? 0))
+        defer { socket.shut() }
+        let opening = await socket.readForAWhile()
+        #expect(opening.contains("event: reset"))
+        #expect(opening.contains("Sam"))
+    }
 }
 
 /// A plain TCP client. Reading the raw bytes shows exactly what the server sends
