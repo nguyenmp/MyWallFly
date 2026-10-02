@@ -170,17 +170,63 @@ People need to fix the transcript, because diarization is not perfect. Three kin
 - Merge two speakers into one.
 - Fix the words.
 
-Two tables hold it all:
+### Every change points at a time
+
+A change marks a stretch of time on a track. It never marks a place in the text.
+
+The rest of the design follows from this rule. The provider's words are kept as they came and are never edited. The end-of-meeting pass rewrites both the text and the labels. A change stored as character positions would break as soon as the text shifts. A change stored as a time does not move.
+
+Speechmatics already gives the time of each word, so turning a highlight on the page into a start and an end time is straightforward.
+
+### Pieces tile the timeline
+
+The transcript is a row of pieces. A piece is a stretch of time with one speaker. The pieces cover the meeting with no gaps and no overlaps.
+
+A change to part of a turn splits it. Reassign the middle of a turn from Mark to Sarah, and one piece becomes three:
+
+- `0:00–0:05` Mark
+- `0:05–0:07` Sarah
+- `0:07–0:10` Mark
+
+This is why two changes never fight over a moment. Each piece already belongs to one speaker, so the next change just splits the piece it lands in. There is no tie to break, and no rule for who wins.
+
+### Two tables and one rule for using them
 
 ```sql
 -- what the provider said, kept as it came
 transcript_base (meeting_id, track, start_ms, end_ms, text, speaker_label)
 
 -- what the user changed, applied on top
-correction (meeting_id, kind, start_ms, end_ms, value, made_at)
+correction (meeting_id, revision, track, kind, start_ms, end_ms, value, made_at)
 ```
 
-`kind` is `speaker`, `merge`, or `words`. Each change gets a revision number so it can be undone. Warn the user that speaker names change when the second pass lands.
+`kind` is `speaker`, `merge`, or `words`. Each change gets a revision number.
+
+Stored changes can overlap: someone can edit a stretch, then edit it again. The applied result never overlaps. Apply the changes in revision order, and rebuild the pieces each time. The last change to touch a moment sets the speaker. Undo means replaying the list without that revision.
+
+### The speaker list is a view, not a table
+
+The list at the top of the page shows every speaker and the times they spoke. Build it from the pieces; do not store it. After the split above, Mark's entry goes from one time to two, with Sarah's between them, and nothing needs updating by hand.
+
+### A merge is a record
+
+Merging two speakers records that the two labels are one person. It does not rewrite the ranges where each one spoke. A record is one change to undo rather than one per turn, and it does not care which labels the current pass happens to use.
+
+### The page
+
+The transcript streams into an HTML page, text only and never audio (decision 5). The speaker list sits at the top. Five gestures cover the three kinds of fix:
+
+- Rename a speaker. Type a name, and it applies to that speaker for the rest of the meeting.
+- Merge two speakers. Drag one name onto another.
+- Reassign a whole turn. Click the speaker on a line and pick a new one.
+- Reassign a stretch. Highlight text, then pick a name.
+- Fix the words. Type over them.
+
+Three rules keep the page honest:
+
+- **Only settled lines take edits.** The open line, the one with the `…`, is read-only. Its label can flip between two similar voices while the sentence is still being decided.
+- **Show the track.** Each track is diarized on its own, so "S1" on the mic is not the same person as "S1" on system audio. The speaker list must say which track a name belongs to.
+- **Warn when the second pass lands.** It replaces the live speaker labels, so the names a user set will move.
 
 ## Keys
 
@@ -238,7 +284,7 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- No page shows the transcript, and nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- No page shows the transcript, and nothing is in a database yet, though the page design is settled (see "Edits"). A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 
