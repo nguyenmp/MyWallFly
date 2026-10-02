@@ -2,7 +2,7 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: capture works, and audio comes back from Speechmatics as a labelled transcript. Nothing is stored or shown in a page yet.** Everything below is a decision, a reason, or an open question.
+**Status: capture works, the transcript comes back from Speechmatics with speaker labels, and a run shows it live in a browser page. Nothing is stored in a database yet, and no audio is read back for the end-of-meeting pass.** Everything below is a decision, a reason, or an open question.
 
 ## Try it now
 
@@ -41,6 +41,8 @@ swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone
 swift run wallfly-transcribe --out runs/monday # write into that folder instead
 swift run wallfly-transcribe --final-only    # do not follow the words being spoken
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
+swift run wallfly-transcribe --no-open       # do not open the browser
+swift run wallfly-transcribe --port 8765     # serve the page on a fixed port
 ```
 
 Lines appear as people talk. Nothing waits for the meeting to end.
@@ -56,6 +58,14 @@ One line at the bottom of the terminal shows the words so far while someone is m
 Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
 
 `--partials` adds the words in progress when the output is not a terminal, for example in a log.
+
+### The transcript page
+
+A run also opens the transcript in your browser and shows the meeting there. Settled lines appear as they land, and each track keeps one line for the words still being spoken. The page is the same one the edits are designed for (see "Edits"), so a run and a saved transcript look alike.
+
+The page is served from this machine on the loopback address, on a port picked at random. Only text crosses to it: the audio never leaves the machine (decision 5). Closing the tab does not stop the run, and opening the tab late shows everything so far.
+
+`--no-open` leaves the browser alone and just prints the address. `--port` pins the port, which is handy when you want to reload the page yourself.
 
 ### What a run writes
 
@@ -150,7 +160,7 @@ The tests need no key and no network. They cover reading a `.env` file, the star
 2. **Capture audio with ScreenCaptureKit.** It ships with macOS, it needs no driver, and it is the only way to get system audio. Go cannot capture system audio at all. We rejected CoreAudio process taps: they are fragile, and their low latency does not help us. We rejected malgo too, because it cannot capture system audio either.
 3. **Send only speech.** Run voice detection first, and send only speech to the provider. Meetings are mostly silence, and we pay per minute.
 4. **Downsample to 16 kHz mono and stream it.** Do not hold raw audio in memory.
-5. **Send the browser text only.** The page receives the transcript, never the audio, over Server-Sent Events or a WebSocket.
+5. **Send the browser text only.** The page receives the transcript, never the audio, over Server-Sent Events. A run serves the page and the stream from the same small HTTP server on the loopback address.
 6. **Store the transcript on disk.** SQLite is fine. Do not keep it in memory.
 7. **Diarize twice, both times with a hosted provider.** A streaming call labels speakers live for the page. When the meeting ends, send the saved audio again and replace the labels with the tighter batch result. Keep the audio on disk only until that second call finishes.
 8. **Start with two tracks:** the microphone and one system-audio mix. Per-app audio and multiple microphones come later.
@@ -284,7 +294,7 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- No page shows the transcript, and nothing is in a database yet, though the page design is settled (see "Edits"). A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- The page shows the transcript live, but nothing is in a database yet, and changes made on the page are not saved. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 
@@ -292,7 +302,7 @@ What is not:
 2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
 3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
 4. Send the saved audio through the batch pass and replace the live speaker labels with the result. Delete the folder once that lands.
-5. Store the transcript in SQLite, then show it on a page.
+5. Store the transcript in SQLite, and save the changes made on the page.
 
 The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
 

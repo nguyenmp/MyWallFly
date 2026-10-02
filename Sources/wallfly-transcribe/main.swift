@@ -15,13 +15,20 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe --final-only     do not follow the words being spoken
 //   swift run wallfly-transcribe --check          open a stream and stop: tests the key
 //   swift run wallfly-transcribe 60 --verbose     log every message from the service
+//   swift run wallfly-transcribe --no-open        do not open the browser
+//   swift run wallfly-transcribe --port 8765      serve the page on a fixed port
 //
 // Every run makes a folder named after the moment it started. The folder holds
 // the transcript and one WAV file per track: the second pass at the end of a
 // meeting needs the audio again.
 //
-// While it runs, the bottom line of the terminal shows the words so far.
-// Finished lines scroll up above it.
+// The run opens the transcript page in the browser and shows the meeting there:
+// settled lines as they land, and one line per track for the words still being
+// spoken. The page is served from this machine, on a port picked at random. Only
+// text crosses to it; the audio never does.
+//
+// The terminal still shows the same thing: the bottom line holds the words so
+// far, and finished lines scroll up above it.
 //
 // The key comes from SPEECHMATICS_API_KEY, in the environment or in .env.
 // The app never holds a key of its own, and never writes one to a log.
@@ -197,6 +204,33 @@ if !finalOnly {
     Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
 }
 
+// MARK: - The live page
+
+/// The page is the main way to watch a run, and both the meeting and a replay
+/// use it. Only text crosses to it: the audio never leaves this machine.
+let pagePort = value(after: "--port", in: arguments).flatMap(UInt16.init) ?? 0
+/// The name the page shows in its title, so two runs are told apart at a glance.
+let pageBanner = runFolder?.lastPathComponent
+    ?? URL(fileURLWithPath: transcriptPath).deletingPathExtension().lastPathComponent
+var live: LivePage?
+do {
+    let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort)
+    live = page
+    Console.note("page:       \(url.absoluteString)")
+    if !arguments.contains("--no-open") {
+        let opener = Process()
+        opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        opener.arguments = [url.absoluteString]
+        do {
+            try opener.run()
+        } catch {
+            Console.note("could not open the browser: \(error.localizedDescription)")
+        }
+    }
+} catch {
+    Console.note("no live page this run: \(error)")
+}
+
 // MARK: - Replay a recording
 
 if let filePath = value(after: "--file", in: arguments) {
@@ -245,16 +279,22 @@ if let filePath = value(after: "--file", in: arguments) {
         let report = try await pipe.run(captureStart: AudioFileSource.captureStart(),
                                         frames: stream) { event in
             printer.show(event)
+            live?.show(event)
         }
         printer.finishLine()
+        live?.note("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
+        live?.finish()
         Console.note("")
         Console.note("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
         try? transcriptFile?.close()
     } catch {
         printer.finishLine()
+        live?.note("Transcription failed: \(error)", level: "problem")
+        live?.finish()
         Console.err("Transcription failed: \(error)\n")
         exit(1)
     }
+    live?.stop()
     exit(0)
 }
 
@@ -334,6 +374,7 @@ if !wavWriters.isEmpty {
 let runner = Task {
     try await pipe.run(captureStart: start, frames: capture.frames) { event in
         printer.show(event)
+        live?.show(event)
     }
 }
 
@@ -366,11 +407,14 @@ do {
         Console.note("\(track.track.rawValue): \(String(format: "%.1f", track.seconds)) s of audio, "
                     + "\(track.dropped) dropped buffers, drift \(String(format: "%.0f ms", track.drift * 1000))")
     }
+    live?.note("sent \(report.framesSent) buffers, dropped \(report.framesDropped), \(report.segments) segments")
 } catch {
     printer.finishLine()
+    live?.note("Transcription failed: \(error)", level: "problem")
     Console.err("Transcription failed: \(error)\n")
     exitCode = 1
 }
+live?.finish()
 
 // Fill in each WAV header, so the files are playable and report the right
 // length. This runs even when the meeting failed: the audio is still worth
@@ -382,6 +426,7 @@ for track in tracks {
     if let failure { Console.note("  could not finish it: \(failure)") }
 }
 try? transcriptFile?.close()
+live?.stop()
 exit(exitCode)
 
 /// Keeps the transcript up to date: settled lines, plus one open line for the
