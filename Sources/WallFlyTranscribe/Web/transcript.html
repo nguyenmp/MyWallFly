@@ -731,6 +731,8 @@ function showPop(x, y, sel){
           + esc(nameOf(sel.track,label)) + '</button>';
   });
   if (!labels.length) html += '<span class="popnote">Only one speaker on this track.</span>';
+  html += '<button class="mini" data-act="new"'
+        + ' title="Give this stretch to someone the service has not told apart">+ New person</button>';
   html += '</div>';
   html += '<p class="popnote">To fix the words, use the pencil on the line.</p>';
   pop.innerHTML = html;
@@ -789,6 +791,16 @@ function saveEdits(){
 function pushRevision(r){
   revisions.push(r);
   saveEdits();
+}
+
+// A label for someone the service did not tell apart. It starts with "new-" so
+// it can never clash with a label the provider sends later.
+function newSpeakerLabel(track){
+  var used = {};
+  turns.forEach(function(t){ if (t.track === track) used[t.label] = 1; });
+  var n = 1;
+  while (used['new-' + n]) n++;
+  return 'new-' + n;
 }
 
 function addSpeaker(track, t0, t1, label){
@@ -935,6 +947,19 @@ byId('pop').addEventListener('click', function(e){
   if (!btn) return;
   var sel = byId('pop')._sel;
   if (!sel) return;
+  if (btn.getAttribute('data-act')==='new'){
+    // Pull this stretch out as someone the service has not named. The name is a
+    // placeholder, so ask for the real one straight away.
+    var track = sel.track;
+    var label = newSpeakerLabel(track);
+    addSpeaker(track, sel.t0, sel.t1, label);
+    renaming = {track: track, canon: label};
+    var range = window.getSelection();
+    if (range) range.removeAllRanges();
+    hidePop();
+    render();
+    return;
+  }
   if (btn.getAttribute('data-act')==='assign'){
     addSpeaker(sel.track, sel.t0, sel.t1, btn.getAttribute('data-label'));
     var s = window.getSelection();

@@ -224,19 +224,21 @@ Merging two speakers records that the two labels are one person. It does not rew
 
 ### The page
 
-The transcript streams into an HTML page, text only and never audio (decision 5). The speaker list sits at the top. Five gestures cover the three kinds of fix:
+The transcript streams into an HTML page, text only and never audio (decision 5). The speaker list sits at the top. Six gestures cover the three kinds of fix:
 
 - Rename a speaker. Type a name, and it applies to that speaker for the rest of the meeting.
 - Merge two speakers. Drag one name onto another.
 - Reassign a whole turn. Click the speaker on a line and pick a new one.
 - Reassign a stretch. Highlight text, then pick a name.
+- Add a speaker. Pick "New person" while reassigning, and name a voice the service did not tell apart.
 - Fix the words. Type over them.
 
-Three rules keep the page honest:
+Four rules keep the page honest:
 
-- **Only settled lines take edits.** The open line, the one with the `…`, is read-only. Its label can flip between two similar voices while the sentence is still being decided.
+- **Only settled words take edits.** The open line's words are still changing, so they cannot be reassigned and cannot be typed over. Its speaker can be named while someone is talking, and the words take edits once they settle, a second or two later.
 - **Show the track.** Each track is diarized on its own, so "S1" on the mic is not the same person as "S1" on system audio. The speaker list must say which track a name belongs to.
 - **Warn when the second pass lands.** It replaces the live speaker labels, so the names a user set will move.
+- **Keep an added speaker apart from the service's labels.** A speaker the reader adds carries a label like `new-1`, which the provider never sends, so a name the reader invented can never clash with a label the service picks later.
 
 ## Keys
 
