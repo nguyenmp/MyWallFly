@@ -44,6 +44,12 @@ public struct SavedMeeting: Sendable {
     /// Where the page's changes live, and where its new ones go.
     public var editsURL: URL { folder.appendingPathComponent("edits.json") }
 
+    /// The readable transcript with the page's changes applied. The page writes
+    /// this one, because the rules for names and merges live there.
+    public var editedTranscriptURL: URL {
+        folder.appendingPathComponent("transcript.edited.txt")
+    }
+
     /// Reads a run's folder.
     public static func load(from folder: URL) throws -> SavedMeeting {
         let edits = countEdits(at: folder.appendingPathComponent("edits.json"))

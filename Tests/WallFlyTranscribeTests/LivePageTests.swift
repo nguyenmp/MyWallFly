@@ -151,6 +151,31 @@ struct LivePageTests {
         #expect(turns[0].t1 == 3000)
         #expect(turns[0].text == "Hello there")
     }
+
+    @Test("the readable transcript the page sends is written beside the run")
+    func writesTheReadableTranscript() async throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wallfly-edited-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let (page, url) = try LivePage.start(banner: "test run", transcriptURL: file)
+        defer { page.stop() }
+
+        let text = "[   0.00s] mic Samantha: Hello there.\n"
+        var request = URLRequest(url: url.appendingPathComponent("transcript"))
+        request.httpMethod = "POST"
+        request.httpBody = Data(text.utf8)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 204)
+
+        // The write happens on the server's queue, so give it a moment.
+        var written: String?
+        for _ in 0..<50 {
+            if let body = try? String(contentsOf: file, encoding: .utf8) { written = body; break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(written == text)
+    }
 }
 
 /// A plain TCP client. Reading the raw bytes shows exactly what the server sends

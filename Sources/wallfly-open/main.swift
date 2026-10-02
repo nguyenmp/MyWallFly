@@ -102,7 +102,9 @@ let page: LivePage
 do {
     let port = value(after: "--port", in: arguments).flatMap(UInt16.init) ?? 0
     let started = try LivePage.start(banner: meeting.label, port: port,
-                                     editsURL: meeting.editsURL, restoring: meeting.turns)
+                                     editsURL: meeting.editsURL,
+                                     transcriptURL: meeting.editedTranscriptURL,
+                                     restoring: meeting.turns)
     page = started.page
     tell("page:       \(started.url.absoluteString)")
     if !arguments.contains("--no-open") {

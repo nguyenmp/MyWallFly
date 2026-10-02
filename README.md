@@ -142,11 +142,12 @@ swift run wallfly-open 2026-10-02T18-33-44Z
 
 It serves the page and opens it, the same way a live run does. The same gestures work, and so does saving: a change goes straight back to that folder's `edits.json`. The difference is where the lines come from — a folder, not a microphone. Every line is settled, so every line takes edits.
 
-The folder holds three files:
+The folder holds four files:
 
-- `transcript.txt` — the transcript a person reads.
+- `transcript.txt` — the transcript as the provider sent it, written while the run goes.
 - `turns.jsonl` — the same turns, one per line, for the app to read back exactly.
 - `edits.json` — the changes made on the page.
+- `transcript.edited.txt` — the transcript with those changes applied, names and all. It appears the first time you change something, and is rewritten as the meeting goes on.
 
 A folder from before `turns.jsonl` existed still opens. The transcript is read instead, and the end of each line is guessed. The command says which it used.
 

@@ -153,6 +153,9 @@ public final class LivePageServer: @unchecked Sendable {
     /// Where the page's changes are kept between page loads. Nil when the run has
     /// no folder, and the changes then last only as long as the run itself.
     private let editsURL: URL?
+    /// Where the readable transcript is kept: the meeting with the page's changes
+    /// applied. Nil when the run has no folder.
+    private let transcriptURL: URL?
     /// Where the record of what the provider settled is kept. Nil when this
     /// server is serving a meeting that was already recorded.
     private let turnsURL: URL?
@@ -167,12 +170,14 @@ public final class LivePageServer: @unchecked Sendable {
 
     public init(banner: String? = nil, port: UInt16 = 0,
                 editsURL: URL? = nil, turnsURL: URL? = nil,
+                transcriptURL: URL? = nil,
                 restoring: [LiveTurn]? = nil) throws {
         self.pageHTML = try TranscriptPage.html()
         self.banner = banner
         self.requestedPort = port
         self.editsURL = editsURL
         self.turnsURL = turnsURL
+        self.transcriptURL = transcriptURL
         self.isSavedPage = restoring != nil
         // A run in this folder has been here before. Pick up the changes it left.
         if let editsURL, let saved = try? Data(contentsOf: editsURL) {
@@ -302,6 +307,16 @@ public final class LivePageServer: @unchecked Sendable {
         }
     }
 
+    /// Writes the readable transcript: the meeting with the page's changes
+    /// applied. The page works the changes out, because the rules for names,
+    /// merges, and reassignments live there. The server only keeps the text.
+    public func saveTranscript(_ text: String) {
+        queue.async { [self] in
+            guard let transcriptURL else { return }
+            try? Data(text.utf8).write(to: transcriptURL, options: .atomic)
+        }
+    }
+
     // MARK: - The socket
 
     private func accept(_ connection: NWConnection) {
@@ -361,6 +376,14 @@ public final class LivePageServer: @unchecked Sendable {
             // The page sends the whole list of changes after every edit.
             readBody(connection, have: body, need: contentLength) { [weak self] full in
                 self?.saveEdits(String(decoding: full, as: UTF8.self))
+                self?.respond(connection, status: "204 No Content",
+                              type: "text/plain; charset=utf-8", body: Data())
+            }
+        case ("POST", "/transcript"):
+            // The page sends the readable transcript, already spelled out with
+            // the names it is showing.
+            readBody(connection, have: body, need: contentLength) { [weak self] full in
+                self?.saveTranscript(String(decoding: full, as: UTF8.self))
                 self?.respond(connection, status: "204 No Content",
                               type: "text/plain; charset=utf-8", body: Data())
             }
@@ -501,9 +524,11 @@ public final class LivePage: @unchecked Sendable {
     /// Loads the page and starts the server. Returns the address to open.
     public static func start(banner: String? = nil, port: UInt16 = 0,
                              editsURL: URL? = nil, turnsURL: URL? = nil,
+                             transcriptURL: URL? = nil,
                              restoring: [LiveTurn]? = nil) throws -> (page: LivePage, url: URL) {
         let server = try LivePageServer(banner: banner, port: port, editsURL: editsURL,
-                                        turnsURL: turnsURL, restoring: restoring)
+                                        turnsURL: turnsURL, transcriptURL: transcriptURL,
+                                        restoring: restoring)
         let url = try server.start()
         return (LivePage(server: server), url)
     }

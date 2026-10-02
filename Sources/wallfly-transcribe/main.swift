@@ -203,6 +203,7 @@ Console.note("transcript: \(transcriptPath)")
 if let runFolder {
     Console.note("record:     \(runFolder.appendingPathComponent("turns.jsonl").path)")
     Console.note("changes:    \(runFolder.appendingPathComponent("edits.json").path)")
+    Console.note("readable:   \(runFolder.appendingPathComponent("transcript.edited.txt").path)")
 }
 if !finalOnly {
     Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
@@ -224,8 +225,10 @@ do {
     // no folder keeps its changes in memory only.
     let editsURL = runFolder?.appendingPathComponent("edits.json")
     let turnsURL = runFolder?.appendingPathComponent("turns.jsonl")
+    let readableURL = runFolder?.appendingPathComponent("transcript.edited.txt")
     let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort,
-                                         editsURL: editsURL, turnsURL: turnsURL)
+                                         editsURL: editsURL, turnsURL: turnsURL,
+                                         transcriptURL: readableURL)
     live = page
     Console.note("page:       \(url.absoluteString)")
     if !arguments.contains("--no-open") {

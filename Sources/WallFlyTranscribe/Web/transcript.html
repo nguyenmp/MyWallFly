@@ -807,6 +807,47 @@ function saveEdits(){
 function pushRevision(r){
   revisions.push(r);
   saveEdits();
+  saveText();
+}
+
+// The readable transcript: the lines as they appear on the page, names and all.
+// The page works this out, because the rules for names, merges, and
+// reassignments live here, and hands the text to the run to write.
+function transcriptText(){
+  var out = [];
+  pieces().forEach(function(p){
+    var words = p.words.map(function(w){ return w.text; }).join(' ');
+    out.push(stamp(p.t0) + ' ' + tc(p.track) + ' ' + nameOf(p.track, p.label) + ': ' + words);
+  });
+  return out.length ? out.join('\n') + '\n' : '';
+}
+
+// The time on a line, padded the way the run's own transcript pads it.
+function stamp(ms){
+  var text = (ms / 1000).toFixed(2);
+  while (text.length < 7) text = ' ' + text;
+  return '[' + text + 's]';
+}
+
+// Sends the readable transcript. A meeting that is still running changes it
+// often, so this waits a moment and sends only when the text has really changed.
+// It also waits until something has been changed: before that, transcript.txt
+// already says exactly what this would.
+var textTimer = null;
+var textSent = null;
+function saveText(){
+  if (!LIVE || textTimer || !revisions.length) return;
+  textTimer = setTimeout(function(){
+    textTimer = null;
+    var text = transcriptText();
+    if (text === textSent) return;
+    textSent = text;
+    try {
+      fetch('/transcript', {method: 'POST',
+                            headers: {'Content-Type': 'text/plain; charset=utf-8'},
+                            body: text});
+    } catch (e) { /* the run is gone; the page still works */ }
+  }, 1000);
 }
 
 // A label for someone the service did not tell apart. It starts with "new-" so
@@ -1104,6 +1145,7 @@ byId('panel').addEventListener('click', function(e){
 function undoRevision(n){
   revisions = revisions.filter(function(r){ return r.n !== n; });
   saveEdits();
+  saveText();
   render();
 }
 
@@ -1126,6 +1168,7 @@ function runBatch(){
   });
   revisions.forEach(function(r){ if (r.kind==='name') r.rechecked = true; });
   saveEdits();
+  saveText();
   bannerText = 'The end-of-meeting pass re-labelled every speaker, so “S1” and “S2” now mean different voices. '
              + 'Your names, merges, and reassignments stayed with the voice they were set on, matched by the '
              + 'time that voice first spoke. Check any name marked with ↻.';
@@ -1160,6 +1203,8 @@ function connectLive(){
   // it up.
   function refresh(){
     buildWords();
+    // The readable transcript follows the page, so it is kept up to date too.
+    saveText();
     if (editingLine || renaming) return;
     // A redraw in the middle of a drag or a selection would throw it away.
     if (!canRenderNow()){ pendingRender = true; return; }
