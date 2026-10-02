@@ -278,6 +278,18 @@ function labelAt(track, t){
   }
   return null;
 }
+// The speaker a line is shown with right now, reassignments included. This must
+// agree with the header of that line, which shows what the pieces carry. Reading
+// the original assignment instead makes the popover hide the real choice: a line
+// already moved to S2 would offer only S2, and S1 could not be picked back.
+function shownLabelAt(track, t){
+  var ps = pieces();
+  for (var i=0;i<ps.length;i++){
+    var p = ps[i];
+    if (p.track===track && t>=p.t0 && t<p.t1) return p.label;
+  }
+  return labelAt(track, t);
+}
 function firstSight(track, label){
   var hit = turns.filter(function(x){ return x.track===track && x.label===label; })
                  .sort(function(a,b){ return a.t0-b.t0; })[0];
@@ -790,7 +802,7 @@ function selectionToRange(){
   }
   var t0 = Math.min.apply(null, ws.map(function(w){ return w.t0; }));
   var t1 = Math.max.apply(null, ws.map(function(w){ return w.t1; }));
-  return {track:track, t0:t0, t1:t1, words:ws, currentLabel:labelAt(track,(t0+t1)/2)};
+  return {track:track, t0:t0, t1:t1, words:ws, currentLabel:shownLabelAt(track,(t0+t1)/2)};
 }
 
 /* ---------- edits ---------- */
@@ -919,7 +931,7 @@ byId('transcript').addEventListener('click', function(e){
   if (!hit || !hit.words.length) return;
   var rect = spk.getBoundingClientRect();
   showPop(rect.left, rect.bottom, {
-    track: track, t0:t0, t1:t1, words: hit.words, currentLabel: labelAt(track,(t0+t1)/2)
+    track: track, t0:t0, t1:t1, words: hit.words, currentLabel: shownLabelAt(track,(t0+t1)/2)
   });
 });
 
@@ -962,7 +974,9 @@ byId('transcript').addEventListener('focusout', function(e){
 // mouseup check that ran a moment later saw no selection and closed the popover.
 
 byId('transcript').addEventListener('mouseup', function(e){
-  if (e.target.closest && e.target.closest('#pop')) return;
+  // A click on a speaker name is not a word selection, and the click handler
+  // opens the popover for it. Closing the popover here would wipe it at once.
+  if (e.target.closest && (e.target.closest('#pop') || e.target.closest('.spk'))) return;
   setTimeout(function(){
     var sel = selectionToRange();
     if (!sel) { hidePop(); return; }
