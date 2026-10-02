@@ -62,7 +62,12 @@
 
   /* ---------- layout ---------- */
   .cols{display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:22px; margin-top:20px; align-items:start}
-  @media (max-width:900px){ .cols{grid-template-columns:1fr} }
+  /* Keep the speaker list and the changes beside you while the transcript scrolls. */
+  .cols > div:last-child{position:sticky; top:14px}
+  @media (max-width:900px){
+    .cols{grid-template-columns:1fr}
+    .cols > div:last-child{position:static}
+  }
 
   /* ---------- transcript ---------- */
   .block{margin:0 0 20px; padding-left:11px; border-left:2px solid transparent}
@@ -131,7 +136,7 @@
   <div class="topline">
     <div>
       <h1>Meeting transcript</h1>
-      <p class="sub">Mockup with sample data. No backend, nothing saved.</p>
+      <p class="sub" id="subtitle">Mockup with sample data. No backend, nothing saved.</p>
     </div>
     <div class="actions">
       <button class="gbtn" id="reset">Reset</button>
@@ -170,7 +175,7 @@
             <li><b>Click a speaker</b> on a line to reassign the whole turn.</li>
             <li><b>Rename or merge</b> in the bar above.</li>
           </ul>
-          <p style="margin:9px 0 0">Only settled lines take edits. The live line at the bottom
+          <p id="livehint" style="margin:9px 0 0">Only settled lines take edits. The live line at the bottom
             stays read-only, because its speaker can still change.</p>
         </div>
       </div>
@@ -181,6 +186,22 @@
 
 <div class="pop" id="pop"></div>
 
+<!-- The transcript this page shows. "node render.js <transcript.txt>" swaps this block
+     for a real run, so there is only ever one copy of the page itself. -->
+<script>
+window.WALLFLY_DATA = {
+  label: 'sample data',
+  turns: [
+    {track:'mic',    label:'S1', t0:0,     t1:5000,  text:'Hello everyone, thanks for joining the call.'},
+    {track:'mic',    label:'S1', t0:5000,  t1:9000,  text:'I want to walk through the numbers first.'},
+    {track:'mic',    label:'S2', t0:9000,  t1:12000, text:'Sounds good. I have the deck open.'},
+    {track:'system', label:'S1', t0:12500, t1:14500, text:'Can you see my screen?'},
+    {track:'mic',    label:'S1', t0:14600, t1:17000, text:'Yes. Go ahead and share it.'}
+  ],
+  open: {track:'mic', label:'S2', text:'And I will take notes while you get set up'}
+};
+</script>
+
 <script>
 (function(){
 'use strict';
@@ -188,14 +209,9 @@
 var TRACKS = ['mic','system'];
 var TRACKLABEL = {mic:'mic', system:'system'};
 
-var BASE_TURNS = [
-  {track:'mic',    label:'S1', t0:0,     t1:5000,  text:'Hello everyone, thanks for joining the call.'},
-  {track:'mic',    label:'S1', t0:5000,  t1:9000,  text:'I want to walk through the numbers first.'},
-  {track:'mic',    label:'S2', t0:9000,  t1:12000, text:'Sounds good. I have the deck open.'},
-  {track:'system', label:'S1', t0:12500, t1:14500, text:'Can you see my screen?'},
-  {track:'mic',    label:'S1', t0:14600, t1:17000, text:'Yes. Go ahead and share it.'}
-];
-var OPEN_LINE = {track:'mic', label:'S2', text:'And I will take notes while you get set up'};
+var DATA = window.WALLFLY_DATA || { turns: [], open: null };
+var BASE_TURNS = DATA.turns;
+var OPEN_LINE = DATA.open || null;
 
 var turns = BASE_TURNS.map(function(t){ var c={}; for (var k in t) c[k]=t[k]; return c; });
 var words = [];
@@ -205,6 +221,7 @@ var selectedSpeaker = null;
 var editingLine = null;
 var renaming = null;
 var flashRange = null;
+var scrollTarget = null;
 var bannerText = null;
 
 buildWords();
@@ -497,7 +514,8 @@ function renderTranscript(ps){
     var textEdited = p.words.some(function(w){ return w.fixed; });
     var flash = flashRange && p.t0 < flashRange.t1 && p.t1 > flashRange.t0;
 
-    html += '<div class="block ' + tc(p.track) + (flash?' flash':'') + (editing?' editing':'') + '">';
+    html += '<div class="block ' + tc(p.track) + (flash?' flash':'') + (editing?' editing':'') + '"'
+          + ' data-t0="' + p.t0 + '" data-t1="' + p.t1 + '">';
     html += '<div class="hdr">'
           + '<span class="time">[' + fmt(p.t0) + ']</span>'
           + '<span class="tb ' + tc(p.track) + '">' + tc(p.track) + '</span>'
@@ -526,13 +544,16 @@ function renderTranscript(ps){
     html += '</div>';
   });
 
-  html += '<div class="block open">'
-        + '<div class="hdr"><span class="time">[&hellip;]</span>'
-        + '<span class="tb ' + tc(OPEN_LINE.track) + '">' + tc(OPEN_LINE.track) + '</span>'
-        + '<span class="spk" style="cursor:default">' + esc(OPEN_LINE.label) + '</span>'
-        + '<span class="livetag">live, not settled</span></div>'
-        + '<div class="body">' + esc(OPEN_LINE.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
-        + '</div>';
+  // A meeting that has ended has no live line, so there is nothing to draw.
+  if (OPEN_LINE){
+    html += '<div class="block open">'
+          + '<div class="hdr"><span class="time">[&hellip;]</span>'
+          + '<span class="tb ' + tc(OPEN_LINE.track) + '">' + tc(OPEN_LINE.track) + '</span>'
+          + '<span class="spk" style="cursor:default">' + esc(OPEN_LINE.label) + '</span>'
+          + '<span class="livetag">live, not settled</span></div>'
+          + '<div class="body">' + esc(OPEN_LINE.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
+          + '</div>';
+  }
 
   byId('transcript').innerHTML = html;
 
@@ -542,9 +563,22 @@ function renderTranscript(ps){
   var field = host.querySelector ? host.querySelector('.lntext') : null;
   if (field && field.focus) field.focus();
 
+  // A jump from the speaker list happens after the page is rebuilt, because the
+  // element it lands on only exists once the new transcript is in the page.
+  if (scrollTarget !== null && host.querySelectorAll){
+    var want = Number(scrollTarget);
+    scrollTarget = null;
+    var nodes = host.querySelectorAll('.block');
+    for (var i=0;i<nodes.length;i++){
+      if (Number(nodes[i].getAttribute('data-t0')) === want){
+        if (nodes[i].scrollIntoView) nodes[i].scrollIntoView({block: 'center'});
+        break;
+      }
+    }
+  }
+
   if (flashRange){
-    var r = flashRange;
-    setTimeout(function(){ flashRange = null; render(); }, 900);
+    setTimeout(function(){ flashRange = null; render(); }, 1600);
   }
 }
 
@@ -913,6 +947,7 @@ byId('panel').addEventListener('click', function(e){
   ps.forEach(function(p){ if (p.t0===t0) hit = p; });
   if (!hit) return;
   flashRange = {t0: hit.t0, t1: hit.t1};
+  scrollTarget = hit.t0;
   render();
 });
 
@@ -957,10 +992,20 @@ byId('reset').addEventListener('click', function(){
   editingLine = null;
   renaming = null;
   flashRange = null;
+  scrollTarget = null;
   bannerText = null;
   buildWords();
   render();
 });
+
+/* ---------- start ---------- */
+
+byId('subtitle').textContent = 'Mockup. ' + (DATA.label || 'Sample data')
+                            + '. No backend, nothing saved.';
+if (!OPEN_LINE){
+  var hint = byId('livehint');
+  if (hint) hint.style.display = 'none';
+}
 
 render();
 

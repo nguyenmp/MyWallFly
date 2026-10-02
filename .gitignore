@@ -27,3 +27,6 @@ recordings/
 # Transcript output. It holds other people talking, so keep it out of the repo.
 notes*.txt
 transcript*.txt
+
+# A transcript rendered into the page holds the same words in another form.
+*-page.html
