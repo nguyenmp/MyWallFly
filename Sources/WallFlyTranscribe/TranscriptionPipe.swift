@@ -18,6 +18,10 @@ public struct TranscriptionEvent: Sendable {
 /// front of whichever track began later. After that, a timestamp from the
 /// service is already a meeting timestamp.
 ///
+/// A settled piece becomes a line the moment it arrives. The service commits one
+/// every second or two, so a turn arrives in pieces; the page folds neighbours
+/// back together, and a caller that wants whole lines can do the same.
+///
 /// This costs one stream per track. The Speechmatics trial allows two at once,
 /// so one meeting uses the whole trial quota. Paying for more streams, or
 /// mixing the tracks, is still an open question in the README.
@@ -75,7 +79,7 @@ public struct TranscriptionPipe: Sendable {
             await withTaskGroup(of: Void.self) { group in
                 for (track, client) in clients {
                     group.addTask {
-                        var turn = TurnAccumulator()
+                        var settler = LineSettler()
                         func emit(_ segment: TranscriptSegment) {
                             report.countSegment()
                             onEvent(TranscriptionEvent(track: track, segment: segment))
@@ -84,19 +88,17 @@ public struct TranscriptionPipe: Sendable {
                             debugLog?("\(track.rawValue): \(Self.name(of: event))")
                             switch event {
                             case .final(let words):
-                                for segment in turn.add(words) { emit(segment) }
-                            case .endOfUtterance:
-                                if let segment = turn.flush() { emit(segment) }
+                                // Every settled piece is a line at once, so a new
+                                // speaker is named while they are still talking.
+                                for segment in settler.settle(words) { emit(segment) }
                             case .partial(let words):
-                                // The open line carries the settled words too,
-                                // or the start of a long sentence would vanish.
-                                if let segment = turn.openLine(with: words) { emit(segment) }
+                                // Only the words that have not settled, so the
+                                // line above is not said twice.
+                                if let segment = settler.openLine(with: words) { emit(segment) }
                             default:
                                 break
                             }
                         }
-                        // The stream ended. Anything still open is a real line.
-                        if let segment = turn.flush() { emit(segment) }
                         debugLog?("\(track.rawValue): event stream closed")
                     }
                 }

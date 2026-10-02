@@ -237,82 +237,52 @@ struct PipeMappingTests {
         #expect(data.allSatisfy { $0 == 0 })
     }
 
-    @Test("finals gather into one line until the turn ends")
-    func finalsGatherIntoOneLine() {
-        var turn = TurnAccumulator()
-        let hello = [TranscriptWord(content: "hello", start: 0, end: 0.4, speaker: "S1", isPunctuation: false)]
-        let there = [TranscriptWord(content: "there", start: 0.5, end: 0.9, speaker: "S1", isPunctuation: false)]
+    @Test("every settled piece is a line as it lands")
+    func settledPieceIsALine() {
+        var settler = LineSettler()
+        let first = settler.settle([word("hello", 0, 0.4)])
+        #expect(first.map(\.text) == ["hello"])
+        #expect(first.first?.isFinal == true)
 
-        // Two finals from one speaker stay open. Nothing is emitted yet.
-        #expect(turn.add(hello).isEmpty)
-        #expect(turn.add(there).isEmpty)
-
-        // The pause ends the turn, and the whole sentence comes out at once.
-        let line = turn.flush()
-        #expect(line?.text == "hello there")
-        #expect(line?.speaker == "S1")
-        #expect(line?.start == 0)
-        #expect(line?.end == 0.9)
-        #expect(line?.isFinal == true)
+        // The next piece comes out at once too, instead of waiting for a pause.
+        let second = settler.settle([word("there", 0.5, 0.9)])
+        #expect(second.map(\.text) == ["there"])
     }
 
-    @Test("a new speaker closes the line before it")
-    func newSpeakerClosesTheLine() {
-        var turn = TurnAccumulator()
-        _ = turn.add([TranscriptWord(content: "yes", start: 0, end: 1, speaker: "S1", isPunctuation: false)])
-        let finished = turn.add([TranscriptWord(content: "no", start: 1, end: 2, speaker: "S2", isPunctuation: false)])
-
-        #expect(finished.map(\.speaker) == ["S1"])
-        #expect(finished.first?.text == "yes")
-        #expect(turn.flush()?.text == "no")
+    @Test("a batch with two speakers makes a line each")
+    func twoSpeakersInOneBatch() {
+        var settler = LineSettler()
+        let lines = settler.settle([word("yes", 0, 1), word("no", 1, 2, speaker: "S2")])
+        #expect(lines.map(\.speaker) == ["S1", "S2"])
+        #expect(lines.map(\.text) == ["yes", "no"])
     }
 
-    @Test("punctuation does not count as a speaker change")
-    func punctuationKeepsTheTurnOpen() {
-        var turn = TurnAccumulator()
-        _ = turn.add([TranscriptWord(content: "hi", start: 0, end: 1, speaker: "S1", isPunctuation: false)])
-        let finished = turn.add([TranscriptWord(content: ".", start: 1, end: 1, speaker: nil, isPunctuation: true)])
-        #expect(finished.isEmpty)
-        #expect(turn.flush()?.text == "hi.")
-    }
-
-    @Test("the open line keeps the settled words a partial dropped")
-    func openLineKeepsSettledWords() {
-        var turn = TurnAccumulator()
-        _ = turn.add([
-            TranscriptWord(content: "Hello.", start: 0, end: 0.5, speaker: "S1", isPunctuation: false),
-            TranscriptWord(content: "This", start: 0.6, end: 0.8, speaker: "S1", isPunctuation: false),
-        ])
-        // The service has committed those two words, so the partial carries the
-        // tail and repeats part of what is already settled.
-        let open = turn.openLine(with: [
-            TranscriptWord(content: "This", start: 0.6, end: 0.8, speaker: "S1", isPunctuation: false),
-            TranscriptWord(content: "is", start: 0.9, end: 1.0, speaker: "S1", isPunctuation: false),
-            TranscriptWord(content: "Samantha", start: 1.1, end: 1.6, speaker: "S1", isPunctuation: false),
-        ])
-        #expect(open?.text == "Hello. This is Samantha")
-        #expect(open?.start == 0)
+    @Test("the open line is only the words that have not settled")
+    func openLineIsOnlyFreshWords() {
+        var settler = LineSettler()
+        _ = settler.settle([word("Hello.", 0, 0.5), word("This", 0.6, 0.8)])
+        // The partial repeats the settled words and adds a new one. Only the new
+        // one shows, because the settled words are already the line above.
+        let open = settler.openLine(with: [word("This", 0.6, 0.8), word("is", 0.9, 1.0)])
+        #expect(open?.text == "is")
         #expect(open?.isFinal == false)
     }
 
     @Test("an open line with nothing settled is just the partial")
     func openLineWithoutSettledWords() {
-        let turn = TurnAccumulator()
-        let open = turn.openLine(with: [
-            TranscriptWord(content: "Hi", start: 0, end: 1, speaker: "S1", isPunctuation: false)
-        ])
-        #expect(open?.text == "Hi")
+        #expect(LineSettler().openLine(with: [word("Hi", 0, 1)])?.text == "Hi")
     }
 
     @Test("an open line with nothing at all gives nothing")
     func openLineWithNothing() {
-        #expect(TurnAccumulator().openLine(with: []) == nil)
+        #expect(LineSettler().openLine(with: []) == nil)
     }
 
-    @Test("flushing an empty turn gives nothing")
-    func emptyTurnFlushesNothing() {
-        var turn = TurnAccumulator()
-        #expect(turn.flush() == nil)
+    @Test("a partial that has all settled gives nothing to show")
+    func settledPartialShowsNothing() {
+        var settler = LineSettler()
+        _ = settler.settle([word("hi", 0, 1)])
+        #expect(settler.openLine(with: [word("hi", 0, 1)]) == nil)
     }
 
     @Test("the end message carries the last audio sequence number")

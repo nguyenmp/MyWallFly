@@ -406,23 +406,30 @@ function pieces(){
                    words:part, edited:edited});
       }
 
-      // Fold neighbouring pieces of one line back together, so a change that no
-      // longer moves a speaker does not leave a seam behind.
-      var merged = [];
-      list.forEach(function(p){
-        var last = merged[merged.length-1];
-        if (last && last.label===p.label && Math.abs(last.t1 - p.t0) < 0.5){
-          last.t1 = p.t1;
-          last.words = last.words.concat(p.words);
-          last.edited = last.edited || p.edited;
-        } else {
-          merged.push(p);
-        }
-      });
-      out = out.concat(merged);
+      out = out.concat(list);
     });
   });
-  return out.sort(function(x,y){ return x.t0-y.t0 || (x.track<y.track?-1:1); });
+
+  // A turn arrives in pieces, so neighbouring pieces of one line are folded back
+  // together. A piece from the other track in between keeps them apart: that is
+  // what puts a short word on one track in its place inside a long turn on the
+  // other, instead of after the whole thing.
+  var sorted = out.sort(function(x,y){ return x.t0-y.t0 || (x.track<y.track?-1:1); });
+  var merged = [];
+  sorted.forEach(function(p){
+    var last = merged[merged.length-1];
+    if (last && last.track===p.track
+        && identity(p.track, last.label)===identity(p.track, p.label)
+        && p.t0 - last.t1 < 200){
+      last.t1 = p.t1;
+      last.words = last.words.concat(p.words);
+      last.edited = last.edited || p.edited;
+    } else {
+      merged.push({track:p.track, turn:p.turn, label:p.label,
+                   t0:p.t0, t1:p.t1, words:p.words.slice(), edited:p.edited});
+    }
+  });
+  return merged;
 }
 
 function wordText(w){ return w.text; }

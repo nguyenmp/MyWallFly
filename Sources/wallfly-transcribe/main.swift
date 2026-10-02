@@ -433,26 +433,39 @@ try? transcriptFile?.close()
 live?.stop()
 exit(exitCode)
 
-/// Keeps the transcript up to date: settled lines, plus one open line for the
-/// words still being spoken.
+/// Keeps the transcript up to date: whole lines, one per stretch of one speaker.
 ///
-/// On a terminal the open line is redrawn at the bottom. In a file it is
-/// rewritten in place, so the file always holds the whole transcript and the
-/// words being spoken are always on the last line.
+/// The service settles a turn in pieces, so the pieces of one line are written
+/// into the same line as they arrive. A line ends when the speaker changes, when
+/// a pause comes, or when the meeting stops.
+///
+/// On a terminal the growing line is redrawn at the bottom. In a file it is
+/// rewritten in place, so the file always holds the whole transcript.
 final class SegmentPrinter: @unchecked Sendable {
     private let lock = NSLock()
     private let showPartials: Bool
     private let canRedraw: Bool
     private let file: FileHandle?
-    /// Whether the open line should follow the words that are still changing.
+    /// Whether the bottom line should follow the words that are still changing.
     private let followDrafts: Bool
     /// True while a redrawn line sits on the bottom of the terminal.
     private var openLine = false
-    /// Where the open line starts in the file. Nil when the next write starts a
-    /// new line.
-    private var draftStart: UInt64?
+    /// Where the line being written starts in the file. Nil when the next write
+    /// starts a new line.
+    private var lineStart: UInt64?
     /// How far the file has been written.
     private var endOffset: UInt64 = 0
+
+    /// The settled words of the line being built. Nil between lines.
+    private var settled: String?
+    /// The speaker and track of that line, as one key. Nil between lines.
+    private var owner: String?
+    /// When the line being built started.
+    private var stamp: Double = 0
+    /// When its settled words ended, so a pause can end it.
+    private var lastEnd: Double = 0
+    /// The words still being spoken, shown after the settled ones.
+    private var draft: String?
 
     init(showPartials: Bool, canRedraw: Bool, file: FileHandle? = nil, followDrafts: Bool = true) {
         self.showPartials = showPartials
@@ -461,62 +474,105 @@ final class SegmentPrinter: @unchecked Sendable {
         self.followDrafts = followDrafts
     }
 
-    /// Redraws the bottom line of the terminal. Does nothing when the output is
-    /// not a terminal, where redrawing would fill a log with junk.
-    func status(_ text: String) {
-        guard canRedraw else { return }
-        lock.lock(); defer { lock.unlock() }
-        let clipped = String(text.prefix(240))
-        Console.err("\r\u{1B}[K" + clipped)
-        openLine = true
-    }
-
     func show(_ event: TranscriptionEvent) {
         let segment = event.segment
+        let key = ownerKey(of: event)
 
         if !segment.isFinal {
-            let draft = "   … \(label(for: event)): \(segment.text)"
-            if canRedraw { status(draft) }
-            if file != nil {
-                guard followDrafts else { return }
-                lock.lock(); defer { lock.unlock() }
-                rewriteOpenLine(draft)
-            } else if !canRedraw && showPartials {
-                lock.lock(); defer { lock.unlock() }
-                clearLocked()
-                Console.line(draft)
-            }
+            showDraft(segment.text, key: key)
             return
         }
 
         lock.lock(); defer { lock.unlock() }
-        clearLocked()
-        if file != nil {
-            rewriteOpenLine(line(for: event))
-            // The line is settled. The next draft opens a new line after it.
-            draftStart = nil
+        // A settled piece joins the line above when the same speaker carries on
+        // without a pause. Otherwise that line is finished.
+        if settled != nil && key == owner && segment.start - lastEnd < 0.2 {
+            settled = (settled ?? "") + " " + segment.text
         } else {
-            Console.line(line(for: event))
+            commit()
+            settled = segment.text
+            owner = key
+            stamp = segment.start
+        }
+        draft = nil
+        lastEnd = segment.end
+        redraw()
+    }
+
+    /// Finishes the last line, so a run that stops mid sentence still writes
+    /// everything that settled.
+    func finishLine() {
+        lock.lock(); defer { lock.unlock() }
+        draft = nil
+        commit()
+        clearLocked()
+    }
+
+    /// Shows the words still being spoken. A pipe or a log cannot be rewritten,
+    /// so there it becomes its own line, and only when asked for.
+    private func showDraft(_ words: String, key: String) {
+        if file == nil && !canRedraw {
+            guard showPartials else { return }
+            lock.lock(); defer { lock.unlock() }
+            Console.line("   … \(key): \(words)")
+            return
+        }
+        if file != nil && !followDrafts { return }
+        lock.lock(); defer { lock.unlock() }
+        draft = words
+        redraw()
+    }
+
+    /// Shows the line so far, at the bottom of the terminal and in the file.
+    private func redraw() {
+        guard settled != nil else {
+            // Nothing has settled yet, so the draft is the whole line. It stays
+            // off the file until something does.
+            guard canRedraw, let draft else { return }
+            Console.err("\r\u{1B}[K" + String("   … \(owner ?? ""): \(draft)".prefix(240)))
+            openLine = true
+            return
+        }
+        let text = text()
+        if file != nil { rewrite(text) }
+        if canRedraw {
+            Console.err("\r\u{1B}[K" + String(text.prefix(240)))
+            openLine = true
         }
     }
 
-    func finishLine() {
-        lock.lock(); defer { lock.unlock() }
-        clearLocked()
+    /// Finishes the line being built. The next one starts below it.
+    private func commit() {
+        guard settled != nil else { return }
+        if canRedraw {
+            if openLine { Console.err("\n"); openLine = false }
+        } else if file == nil {
+            Console.line(text())
+        }
+        lineStart = nil
+        settled = nil
+        owner = nil
     }
 
-    /// Puts `text` where the open line is, and cuts back whatever was there.
-    /// Writing the shorter text without cutting back would leave old words
+    /// The line being built, with the words still being spoken after it.
+    private func text() -> String {
+        var out = "[\(String(format: "%7.2f", stamp))s] \(owner ?? ""): \(settled ?? "")"
+        if let draft, !draft.isEmpty { out += " " + draft }
+        return out
+    }
+
+    /// Puts `text` where the line being written is, and cuts back whatever was
+    /// there. Writing shorter text without cutting back would leave old words
     /// behind it.
-    private func rewriteOpenLine(_ text: String) {
+    private func rewrite(_ text: String) {
         guard let file else { return }
-        let start = draftStart ?? endOffset
+        let start = lineStart ?? endOffset
         let bytes = Data((text + "\n").utf8)
         try? file.seek(toOffset: start)
         try? file.truncate(atOffset: start)
         try? file.write(contentsOf: bytes)
         endOffset = start + UInt64(bytes.count)
-        draftStart = start
+        lineStart = start
     }
 
     private func clearLocked() {
@@ -525,14 +581,8 @@ final class SegmentPrinter: @unchecked Sendable {
         openLine = false
     }
 
-    private func line(for event: TranscriptionEvent) -> String {
-        let stamp = String(format: "%7.2f", event.segment.start)
-        return "[\(stamp)s] \(label(for: event)): \(event.segment.text)"
-    }
-
-    private func label(for event: TranscriptionEvent) -> String {
+    private func ownerKey(of event: TranscriptionEvent) -> String {
         let track = event.track == .microphone ? "mic" : "sys"
-        let speaker = event.segment.speaker ?? "??"
-        return "\(track) \(speaker)"
+        return "\(track) \(event.segment.speaker ?? "??")"
     }
 }

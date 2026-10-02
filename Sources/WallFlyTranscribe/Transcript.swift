@@ -184,76 +184,45 @@ public enum TranscriptSegmenter {
     }
 }
 
-/// Collects final words into one line per speaker turn.
+/// Turns the service's messages into transcript lines.
 ///
-/// The service commits a final every second or two, so one sentence arrives as
-/// several finals. A transcript wants one line per turn, not per fragment. Two
-/// things end a turn: the service says the speaker paused (`EndOfUtterance`), or
-/// a different speaker starts talking.
-public struct TurnAccumulator {
-    private var words: [TranscriptWord] = []
+/// Every settled batch becomes a line as it lands. The service commits a final
+/// every second or two, so a turn arrives in pieces. Settling each piece at once
+/// means a new speaker is named and placed on the clock after a few words,
+/// instead of waiting for the whole turn to end. The page folds neighbouring
+/// pieces of one turn back together, so the reader still sees whole lines.
+///
+/// The words still being spoken stay open. Only the part that has not settled is
+/// shown, so the line above is never repeated.
+public struct LineSettler {
+    /// When the last settled words ended.
+    private var settledEnd: Double = 0
 
     public init() {}
 
-    /// Adds a final batch. Returns a finished line when the speaker changed
-    /// part way through the batch.
-    public mutating func add(_ batch: [TranscriptWord]) -> [TranscriptSegment] {
-        if let current = speaker,
-           let incoming = batch.first(where: { !$0.isPunctuation })?.speaker,
-           current != incoming {
-            let finished = flush()
-            words.append(contentsOf: batch)
-            return finished.map { [$0] } ?? []
+    /// The lines in a settled batch, one per speaker in it.
+    public mutating func settle(_ batch: [TranscriptWord]) -> [TranscriptSegment] {
+        let segments = TranscriptSegmenter.segments(from: batch, isFinal: true)
+        if let end = segments.map(\.end).max() {
+            settledEnd = max(settledEnd, end)
         }
-        words.append(contentsOf: batch)
-        return []
+        return segments
     }
 
-    /// Everything settled so far, joined the way a line reads.
-    public var settledText: String {
-        TranscriptSegmenter.segments(from: words, isFinal: false).map(\.text).joined(separator: " ")
-    }
-
-    /// The open line: the settled words, plus the parts of a partial that are
-    /// not already in them.
+    /// The line still being spoken: the part of a partial that has not settled.
     ///
-    /// A partial on its own loses the start of the sentence. The service trims
-    /// the words it has already committed off the front of every partial, so a
-    /// long sentence arrives as a sliding window: "Hello. This is Samantha",
-    /// then "This is Samantha speaking", then "Samantha speaking. We are". The
-    /// word times say where the settled words end and the new ones begin.
+    /// The service trims the words it has already committed off the front of
+    /// every partial, so a long sentence arrives as a sliding window. The word
+    /// times say where the settled words end and the new ones begin, and the
+    /// settled words stay in the line above.
     public func openLine(with partial: [TranscriptWord]) -> TranscriptSegment? {
-        let settledEnd = words.map(\.end).max() ?? 0
         let fresh = partial.filter { $0.start >= settledEnd - 0.02 }
-        let freshParts = TranscriptSegmenter.segments(from: fresh, isFinal: false)
-        let freshText = freshParts.map(\.text).joined(separator: " ")
-
-        let settled = settledText
-        let text = freshText.isEmpty ? settled
-            : (settled.isEmpty ? freshText : settled + " " + freshText)
-        guard !text.isEmpty else { return nil }
-
-        let start = words.first?.start ?? freshParts.first?.start ?? 0
-        let end = max(freshParts.last?.end ?? 0, settledEnd)
-        let speaker = words.first(where: { !$0.isPunctuation })?.speaker ?? freshParts.first?.speaker
-        return TranscriptSegment(speaker: speaker, start: start, end: end, text: text, isFinal: false)
-    }
-
-    /// Closes the current line. Returns nil when there is nothing to close.
-    public mutating func flush() -> TranscriptSegment? {
-        guard !words.isEmpty else { return nil }
-        let pending = words
-        words = []
-        let parts = TranscriptSegmenter.segments(from: pending, isFinal: true)
+        let parts = TranscriptSegmenter.segments(from: fresh, isFinal: false)
         guard let first = parts.first, let last = parts.last else { return nil }
         return TranscriptSegment(speaker: first.speaker,
                                  start: first.start,
                                  end: last.end,
                                  text: parts.map(\.text).joined(separator: " "),
-                                 isFinal: true)
-    }
-
-    private var speaker: String? {
-        words.first(where: { !$0.isPunctuation })?.speaker
+                                 isFinal: false)
     }
 }

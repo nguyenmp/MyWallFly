@@ -47,12 +47,12 @@ swift run wallfly-transcribe --port 8765     # serve the page on a fixed port
 
 Lines appear as people talk. Nothing waits for the meeting to end.
 
-One line at the bottom of the terminal shows the words so far while someone is mid sentence. A finished line scrolls up above it, and the bottom line is left blank until the next person speaks.
+The line being written sits at the bottom and grows as the service settles it. The words still being spoken follow it, after a `…`. When the speaker changes or pauses, the line is finished and scrolls up.
 
 ```
 [   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
-[   4.68s] mic S2: this is Daniel. Let us see whether the labels come out right.
-   … mic S2: see whether the labels come out right
+[   4.68s] mic S2: this is Daniel. Let us see whether the labels come
+   … mic S2: out right
 ```
 
 Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
@@ -93,22 +93,22 @@ swift run wallfly-transcribe --out notes.txt     # one transcript file, no audio
 
 ### Reading the transcript while it runs
 
-`transcript.txt` always holds the transcript as it stands: every settled line, plus one open line for the words still being spoken.
+`transcript.txt` always holds the transcript as it stands: every settled line, plus the words still being spoken on the last line.
 
 ```
 [   0.00s] mic S1: Hello. This is Samantha speaking. We are testing the transcription pipe. And
    … mic S2: Let us see whether the labels come
 ```
 
-The open line, the one with the `…`, is rewritten in place on every update. So it follows the words as they change and is never half a sentence behind. Nothing is appended for it, and the file does not grow while one sentence is being spoken.
+The service settles a turn in pieces, every second or two. Each piece joins the line above it, so one turn still reads as one line, and the line is rewritten in place as it grows. Nothing is appended for it, and the file does not grow while one line is being spoken.
 
-When the speaker pauses, that line settles: it takes its timestamp, and a new open line starts below it.
+A line ends when the speaker changes, or after a pause. That is when its timestamp is fixed and the next line starts below it.
 
-The open line only grows. The service trims the words it has already committed off the front of each partial, so a partial on its own loses the start of a sentence: a long sentence arrives as "Hello. This is Samantha", then "This is Samantha speaking", then "Samantha speaking. We are". The settled words are kept and only the new ones are added, using the word times to tell them apart. Nothing is lost and nothing repeats.
+The open line, the one with the `…`, holds only the words that have not settled. The service trims the words it has already committed off the front of each partial, so only the new ones show, using the word times to tell them apart. The settled words are already in the line above. Nothing is lost and nothing repeats.
 
 One thing does look unsettled: the speaker label can flip between two similar voices while a sentence is still being decided. The settled lines are the ones to trust.
 
-`--final-only` writes settled lines only, and waits for each pause before anything appears.
+`--final-only` does not follow the words being spoken, so no `…` line appears. Settled pieces still arrive as the service sends them.
 
 Notes about the run — settings, totals, warnings — go to standard error, so the transcript is the only thing on standard output. The in-place update needs a real file to seek in, so write to one with `--out`. If you redirect standard output instead, lines are added as they settle:
 
@@ -321,7 +321,7 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **Far-field audio is the hardest case.** Room echo and people talking over each other hurt diarization most. Published accuracy numbers will not match your room.
 - **Speechmatics reads text frames as control messages and binary frames as audio.** Send the start message as bytes and the service answers "Unable to process the audio binary message, the recognition session handshake was not completed yet". It looks like a key or permission problem and it is neither. `startMessage()` returns a `String` now, so the mistake does not compile.
 - **The end message must name the last audio chunk.** Bare `{"message":"EndOfStream"}` is rejected by the service schema, and the service then drops the words it was still holding: every meeting loses its last few seconds. The reply is easy to miss, because the words simply never arrive. Send `last_seq_no`, the count of audio frames sent, which the service echoes in every `AudioAdded`.
-- **A final transcript message is not a whole line.** The service commits a final every second or two, so one sentence arrives as several of them. Joining them at the `EndOfUtterance` message, and when the speaker changes, gives one line per turn. Without that the transcript is a column of two word fragments.
+- **A final transcript message is not a whole line.** The service commits a final every second or two, so one sentence arrives as several of them. Settling each one at once names a new speaker and puts them on the clock early, and folding neighbours back together keeps one line per turn. Waiting for `EndOfUtterance` instead made a new speaker wait for someone else to speak before they could be named.
 - **Wait for `EndOfTranscript`, not for the socket to close.** The service sends everything it has, then keeps the socket open. Waiting for the close made Ctrl-C take five seconds instead of a third of one. Treat `EndOfTranscript` as the end of the meeting.
 - **A Command Line Tools install can fail to load the swift-testing macros.** With no full Xcode, `swift test` sometimes stopped with "plugin for module 'TestingMacros' not found". That is a toolchain problem, not a test failure, and it hit about a third of runs. `Package.swift` now points the compiler straight at the plugin directory, which fixed it. If it comes back, check that the directory still exists.
 
