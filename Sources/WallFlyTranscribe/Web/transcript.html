@@ -210,8 +210,11 @@ var TRACKS = ['mic','system'];
 var TRACKLABEL = {mic:'mic', system:'system'};
 
 var DATA = window.WALLFLY_DATA || { turns: [], open: null };
+// Set when a run serves this page and streams the transcript to it. Without it
+// the page is a mockup reading sample data from the file.
+var LIVE = window.WALLFLY_LIVE || null;
 var BASE_TURNS = DATA.turns;
-var OPEN_LINE = DATA.open || null;
+var OPEN_LINES = openLines(DATA.open);
 
 var turns = BASE_TURNS.map(function(t){ var c={}; for (var k in t) c[k]=t[k]; return c; });
 var words = [];
@@ -440,12 +443,33 @@ function byId(id){ return document.getElementById(id); }
 /* ---------- rendering ---------- */
 
 function render(){
+  // A live run keeps the newest words in view, unless the reader has scrolled
+  // back to look at something, or is part way through an edit.
+  var follow = LIVE && !editingLine && !renaming && scrollTarget === null && atBottom();
   var ps = pieces();
   renderBar(ps);
   renderTranscript(ps);
   renderPanel(ps);
   renderLog();
   renderBanner();
+  if (follow) window.scrollTo(0, document.body.scrollHeight);
+}
+
+// True when the reader is already at the bottom of the page.
+function atBottom(){
+  return window.innerHeight + window.scrollY >= document.body.scrollHeight - 120;
+}
+
+// A saved page carries one open line. A live run carries one per track.
+function openLines(raw){
+  var out = [];
+  if (!raw) return out;
+  if (Object.prototype.toString.call(raw) === '[object Array]'){
+    raw.forEach(function(o){ if (o) out.push(o); });
+  } else {
+    out.push(raw);
+  }
+  return out;
 }
 
 function peopleOf(ps){
@@ -545,15 +569,16 @@ function renderTranscript(ps){
   });
 
   // A meeting that has ended has no live line, so there is nothing to draw.
-  if (OPEN_LINE){
+  // Each track has its own, because the mic and the system audio are heard apart.
+  OPEN_LINES.forEach(function(line){
     html += '<div class="block open">'
           + '<div class="hdr"><span class="time">[&hellip;]</span>'
-          + '<span class="tb ' + tc(OPEN_LINE.track) + '">' + tc(OPEN_LINE.track) + '</span>'
-          + '<span class="spk" style="cursor:default">' + esc(OPEN_LINE.label) + '</span>'
+          + '<span class="tb ' + tc(line.track) + '">' + tc(line.track) + '</span>'
+          + '<span class="spk" style="cursor:default">' + esc(line.label) + '</span>'
           + '<span class="livetag">live, not settled</span></div>'
-          + '<div class="body">' + esc(OPEN_LINE.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
+          + '<div class="body">' + esc(line.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
           + '</div>';
-  }
+  });
 
   byId('transcript').innerHTML = html;
 
@@ -998,15 +1023,88 @@ byId('reset').addEventListener('click', function(){
   render();
 });
 
-/* ---------- start ---------- */
+/* ---------- a live run ---------- */
 
-byId('subtitle').textContent = 'Mockup. ' + (DATA.label || 'Sample data')
-                            + '. No backend, nothing saved.';
-if (!OPEN_LINE){
-  var hint = byId('livehint');
-  if (hint) hint.style.display = 'none';
+// A run serves this page and streams the transcript to it. Opened straight from
+// the file there is no run to listen to, and the sample data stays.
+function connectLive(){
+  var source = new EventSource('/events');
+
+  // Puts the page back together after a change from the run. An edit in progress
+  // is left alone: the change is already in the model, and the next redraw picks
+  // it up.
+  function refresh(){
+    buildWords();
+    if (editingLine || renaming) return;
+    render();
+  }
+
+  function setOpenLine(track, label, text){
+    OPEN_LINES = OPEN_LINES.filter(function(o){ return o.track !== track; });
+    if (text) OPEN_LINES.push({track: track, label: label || '??', text: text});
+  }
+
+  // A page that opens part way through a run gets everything so far.
+  source.addEventListener('reset', function(e){
+    var data = JSON.parse(e.data);
+    turns = (data.turns || []).map(function(t){ return t; });
+    OPEN_LINES = data.ended ? [] : (data.open || []).map(function(o){ return o; });
+    refresh();
+  });
+
+  source.addEventListener('turn', function(e){
+    var turn = JSON.parse(e.data);
+    turns.push(turn);
+    // The settled line takes over from the live one on that track.
+    setOpenLine(turn.track, null, null);
+    refresh();
+  });
+
+  source.addEventListener('open', function(e){
+    var line = JSON.parse(e.data);
+    setOpenLine(line.track, line.label, line.text);
+    refresh();
+  });
+
+  source.addEventListener('note', function(e){
+    var note = JSON.parse(e.data);
+    bannerText = note.text;
+    renderBanner();
+  });
+
+  source.addEventListener('end', function(e){
+    var note = JSON.parse(e.data);
+    OPEN_LINES = [];
+    bannerText = note.text || 'The run has ended.';
+    refresh();
+  });
+
+  // The run stops serving when it finishes, and the browser retries on its own.
+  // Saying nothing is deliberate: a page left open would fill with warnings.
 }
 
+/* ---------- start ---------- */
+
+if (LIVE){
+  var liveLabel = LIVE.label || 'this run';
+  document.title = 'MyWallFly — ' + liveLabel;
+  byId('subtitle').textContent = 'Live. ' + liveLabel
+    + '. Lines land here as people speak. Changes you make on this page are not saved yet.';
+  // Both buttons belong to the mockup: one wipes the transcript, the other
+  // scrambles the speaker names.
+  byId('reset').style.display = 'none';
+  byId('batch').style.display = 'none';
+  connectLive();
+} else {
+  byId('subtitle').textContent = 'Mockup. ' + (DATA.label || 'Sample data')
+                              + '. No backend, nothing saved.';
+  if (!OPEN_LINES.length){
+    var hint = byId('livehint');
+    if (hint) hint.style.display = 'none';
+  }
+}
+// Draw the page once, so an empty run has an empty transcript on screen
+// instead of a blank page.
 render();
 
 })();
