@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyWallFly — transcript editing mockup</title>
+<style>
+  :root{
+    --ink:#22201d; --soft:#6b665e; --line:#e2ddd4; --paper:#faf9f7; --card:#ffffff;
+    --mic:#1d4ed8; --sys:#b45309; --edit:#0f766e; --warn:#b91c1c;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:16px/1.55 Georgia,"Iowan Old Style",serif;
+  }
+  button,input{font-family:inherit}
+  .wrap{max-width:1180px; margin:0 auto; padding:22px 20px 60px}
+  h1{font:600 19px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif; margin:0 0 2px}
+  .sub{color:var(--soft); font:13px/1.5 system-ui,sans-serif; margin:0 0 16px}
+  .topline{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap}
+  .actions{margin-left:auto; display:flex; gap:8px; flex-wrap:wrap}
+  .gbtn{font:12px/1 system-ui,sans-serif; padding:7px 11px; border:1px solid var(--line);
+        background:var(--card); color:var(--soft); border-radius:999px; cursor:pointer}
+  .gbtn:hover{border-color:#c9c2b6; color:var(--ink)}
+  .banner{display:none; margin:14px 0 0; padding:10px 13px; border-left:3px solid var(--edit);
+          background:#eef7f5; font:13px/1.5 system-ui,sans-serif; color:#134e4a}
+  .banner.on{display:block}
+
+  /* ---------- speaker bar ---------- */
+  .bar{margin:18px 0 0; border:1px solid var(--line); background:var(--card); border-radius:12px; padding:12px 14px}
+  .bar h2{margin:0 0 9px; font:600 12px/1 system-ui,sans-serif; letter-spacing:.06em;
+          text-transform:uppercase; color:var(--soft)}
+  .trackrow{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 8px}
+  .trackrow:last-child{margin-bottom:0}
+  .trackrow > .tl{font:600 11px/1 system-ui,sans-serif; color:var(--soft); width:52px; flex:none}
+  .chip{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--line);
+        background:#fff; border-radius:999px; padding:5px 6px 5px 11px; cursor:pointer;
+        font:13px/1 system-ui,sans-serif; color:var(--ink)}
+  .chip:hover{border-color:#c9c2b6}
+  .chip.sel{border-color:var(--ink); box-shadow:0 0 0 2px #00000012}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .dot.mic{background:var(--mic)} .dot.sys{background:var(--sys)}
+  .tb{font:600 10px/1 system-ui,sans-serif; padding:3px 6px; border-radius:4px; letter-spacing:.04em}
+  .tb.mic{background:#e7edff; color:#1e3a8a}
+  .tb.sys{background:#fdf0df; color:#8a4b06}
+  .cnt{color:var(--soft); font:11px/1 system-ui,sans-serif}
+  .pen{border:0; background:transparent; cursor:pointer; color:var(--soft); font-size:12px;
+       padding:2px 4px; border-radius:4px}
+  .pen:hover{background:#f1eee8; color:var(--ink)}
+  .recheck{color:var(--edit); font-size:11px; cursor:help}
+  .rn{width:92px; border:1px solid var(--line); border-radius:5px; padding:2px 6px;
+      font:600 12px/1.3 system-ui,sans-serif; color:var(--ink)}
+  .pen.ln{font-size:13px; margin-left:2px}
+  .block.editing{background:#f5f8ff; border-left-color:var(--mic)}
+  .lntext{width:100%; box-sizing:border-box; font:16px/1.5 Georgia,serif; color:var(--ink);
+          background:#fff; border:1px solid #c7d2fe; border-radius:8px; padding:8px 10px;
+          resize:vertical; min-height:58px}
+  .lnhint{font:11px/1.5 system-ui,sans-serif; color:var(--soft); margin:5px 0 0}
+  .popnote{font:11px/1.5 system-ui,sans-serif; color:var(--soft); margin:8px 0 0}
+  .barnote{font:12px/1.5 system-ui,sans-serif; color:var(--soft); margin:8px 0 0}
+
+  /* ---------- layout ---------- */
+  .cols{display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:22px; margin-top:20px; align-items:start}
+  @media (max-width:900px){ .cols{grid-template-columns:1fr} }
+
+  /* ---------- transcript ---------- */
+  .block{margin:0 0 20px; padding-left:11px; border-left:2px solid transparent}
+  .block.mic{border-left-color:#c7d2fe}
+  .block.sys{border-left-color:#f5d9b3}
+  .block.flash{border-left-color:var(--edit); background:#f2f9f7}
+  .hdr{display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin:0 0 3px}
+  .time{font:12px/1 "SF Mono",Menlo,monospace; color:var(--soft)}
+  .spk{border:0; background:#f2efe9; border-radius:5px; padding:3px 7px; cursor:pointer;
+       font:600 12px/1 system-ui,sans-serif; color:#3a3630}
+  .spk:hover{background:#e6e1d7}
+  .body{font-size:16px}
+  .w{border-radius:2px}
+  .w.fixed{background:#eef7f5; box-shadow:0 1px 0 var(--edit)}
+
+  .edtag{font:11px/1 system-ui,sans-serif; color:var(--edit)}
+  .open{opacity:.85; border-left-color:#ddd6cc}
+  .open .body{color:#4b4740; font-style:italic}
+  .livetag{font:11px/1 system-ui,sans-serif; color:var(--soft); background:#f2efe9;
+           padding:3px 6px; border-radius:4px}
+  .gap{font:11px/1 system-ui,sans-serif; color:#a9a29a; margin:-8px 0 12px 11px}
+  .empty{color:var(--soft)}
+
+  /* ---------- popover ---------- */
+  .pop{position:fixed; z-index:40; background:#fff; border:1px solid var(--line);
+       border-radius:10px; box-shadow:0 10px 30px #0000001f; padding:10px; width:250px; display:none}
+  .pop.on{display:block}
+  .pop h4{margin:0 0 8px; font:600 12px/1.4 system-ui,sans-serif; color:var(--soft); font-weight:600}
+  .pop h4 em{font-style:normal; color:var(--ink)}
+  .popbtns{display:flex; flex-wrap:wrap; gap:6px}
+  .pop input{width:100%; margin-top:8px; padding:6px 8px; border:1px solid var(--line);
+             border-radius:6px; font:13px/1.3 system-ui,sans-serif}
+  .mini{font:11px/1 system-ui,sans-serif; border:1px solid var(--line); background:#fff;
+        border-radius:6px; padding:6px 8px; cursor:pointer}
+  .mini:hover{border-color:#c9c2b6}
+  .popword{margin-top:9px; border-top:1px solid var(--line); padding-top:9px}
+  .popword p{margin:0; font:11px/1.5 system-ui,sans-serif; color:var(--soft)}
+
+  /* ---------- right column ---------- */
+  .card{border:1px solid var(--line); background:var(--card); border-radius:12px; padding:12px 14px; margin:0 0 16px}
+  .card h2{margin:0 0 10px; font:600 12px/1 system-ui,sans-serif; letter-spacing:.06em;
+           text-transform:uppercase; color:var(--soft)}
+  .plist{list-style:none; margin:0; padding:0; max-height:230px; overflow:auto}
+  .plist li{display:flex; gap:9px; padding:6px 0; border-bottom:1px solid #f2efe9; cursor:pointer}
+  .plist li:last-child{border-bottom:0}
+  .plist li:hover .pt{text-decoration:underline}
+  .pt{font:12px/1 "SF Mono",Menlo,monospace; color:#1e3a8a; flex:none; padding-top:2px}
+  .pv{font:13px/1.4 system-ui,sans-serif; color:#4b4740}
+  .log{list-style:none; margin:0; padding:0; max-height:300px; overflow:auto}
+  .log li{display:flex; gap:8px; align-items:flex-start; padding:7px 0; border-bottom:1px solid #f2efe9}
+  .log li:last-child{border-bottom:0}
+  .rev{font:11px/1 "SF Mono",Menlo,monospace; color:var(--soft); flex:none; padding-top:2px; width:22px}
+  .rdesc{font:12.5px/1.45 system-ui,sans-serif; flex:1}
+  .undo{border:1px solid var(--line); background:#fff; border-radius:5px; font:11px/1 system-ui,sans-serif;
+        padding:4px 6px; cursor:pointer; color:var(--soft); flex:none}
+  .undo:hover{border-color:#c9c2b6; color:var(--ink)}
+  .hint{font:12.5px/1.6 system-ui,sans-serif; color:var(--soft)}
+  .hint b{color:var(--ink); font-weight:600}
+  .hint ul{margin:6px 0 0; padding-left:17px}
+  .hint li{margin:0 0 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topline">
+    <div>
+      <h1>Meeting transcript</h1>
+      <p class="sub">Mockup with sample data. No backend, nothing saved.</p>
+    </div>
+    <div class="actions">
+      <button class="gbtn" id="reset">Reset</button>
+      <button class="gbtn" id="batch">Simulate the end-of-meeting pass</button>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="bar">
+    <h2>Speakers</h2>
+    <div id="bar"></div>
+    <p class="barnote">Click a name to see when they spoke. Drag one name onto another to merge them.
+      The pencil renames.</p>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div id="transcript"></div>
+    </div>
+    <div>
+      <div class="card" id="panelcard" style="display:none">
+        <h2 id="paneltitle">Speaker</h2>
+        <ul class="plist" id="panel"></ul>
+      </div>
+      <div class="card">
+        <h2>Changes</h2>
+        <ul class="log" id="log"></ul>
+      </div>
+      <div class="card">
+        <h2>How to use this</h2>
+        <div class="hint">
+          <ul>
+            <li><b>Use the pencil on a line</b> to fix its words.</li>
+            <li><b>Highlight words</b>, then pick a name to hand them to someone else.</li>
+            <li><b>Click a speaker</b> on a line to reassign the whole turn.</li>
+            <li><b>Rename or merge</b> in the bar above.</li>
+          </ul>
+          <p style="margin:9px 0 0">Only settled lines take edits. The live line at the bottom
+            stays read-only, because its speaker can still change.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="pop" id="pop"></div>
+
+<script>
+(function(){
+'use strict';
+
+var TRACKS = ['mic','system'];
+var TRACKLABEL = {mic:'mic', system:'system'};
+
+var BASE_TURNS = [
+  {track:'mic',    label:'S1', t0:0,     t1:5000,  text:'Hello everyone, thanks for joining the call.'},
+  {track:'mic',    label:'S1', t0:5000,  t1:9000,  text:'I want to walk through the numbers first.'},
+  {track:'mic',    label:'S2', t0:9000,  t1:12000, text:'Sounds good. I have the deck open.'},
+  {track:'system', label:'S1', t0:12500, t1:14500, text:'Can you see my screen?'},
+  {track:'mic',    label:'S1', t0:14600, t1:17000, text:'Yes. Go ahead and share it.'}
+];
+var OPEN_LINE = {track:'mic', label:'S2', text:'And I will take notes while you get set up'};
+
+var turns = BASE_TURNS.map(function(t){ var c={}; for (var k in t) c[k]=t[k]; return c; });
+var words = [];
+var revisions = [];
+var nextN = 1;
+var selectedSpeaker = null;
+var editingLine = null;
+var renaming = null;
+var flashRange = null;
+var bannerText = null;
+
+buildWords();
+
+function buildWords(){
+  words = [];
+  turns.forEach(function(t, ti){
+    var toks = t.text.split(/\s+/).filter(function(x){ return x.length; });
+    var span = t.t1 - t.t0;
+    toks.forEach(function(w, i){
+      words.push({
+        id: words.length, track: t.track, turn: ti,
+        t0: t.t0 + span*i/toks.length,
+        t1: t.t0 + span*(i+1)/toks.length,
+        text: w
+      });
+    });
+  });
+}
+
+/* ---------- labels, people, names ---------- */
+
+function labelAt(track, t){
+  for (var i=0;i<turns.length;i++){
+    var x = turns[i];
+    if (x.track===track && t>=x.t0 && t<x.t1) return x.label;
+  }
+  return null;
+}
+function firstSight(track, label){
+  var hit = turns.filter(function(x){ return x.track===track && x.label===label; })
+                 .sort(function(a,b){ return a.t0-b.t0; })[0];
+  return hit ? hit.t0 : null;
+}
+function refOf(track, label){
+  return {track:track, label:label, anchor:firstSight(track,label)};
+}
+function resolveRef(r){
+  if (!r) return null;
+  if (r.anchor===null || r.anchor===undefined) return r.label;
+  return labelAt(r.track, r.anchor) || r.label;
+}
+function identity(track, label){
+  var cur = label, guard = 0;
+  while (guard++ < 8){
+    var m = null;
+    for (var i=0;i<revisions.length;i++){
+      var r = revisions[i];
+      if (r.kind==='merge' && r.track===track && resolveRef(r.drop)===cur) { m = r; break; }
+    }
+    if (!m) break;
+    cur = resolveRef(m.keep);
+  }
+  return cur;
+}
+function nameOf(track, label){
+  var canon = identity(track, label);
+  var found = null;
+  revisions.forEach(function(r){
+    if (r.kind==='name' && r.track===track && resolveRef(r)===canon) found = r;
+  });
+  return found ? found.value : canon;
+}
+
+/* ---------- pieces ---------- */
+// Every word on a track, after any text change. A text change covers a stretch of
+// time and carries its new text, so the new words take times spread across that
+// stretch. That keeps every word on the clock, which is what a highlight needs.
+function trackWords(track){
+  var base = words.filter(function(w){ return w.track===track; });
+  var fixes = revisions.filter(function(r){
+    return r.kind==='words' && r.track===track;
+  });
+  if (!fixes.length) return base;
+
+  // Cut the track at every word edge and every text-change edge, work out which
+  // change owns each slice, then put neighbouring slices with the same owner back
+  // together. Without that last step a change would repeat its text per slice.
+  var cuts = [];
+  base.forEach(function(w){ cuts.push(w.t0, w.t1); });
+  fixes.forEach(function(r){ cuts.push(r.t0, r.t1); });
+  cuts = cuts.sort(function(a,b){ return a-b; })
+             .filter(function(v,i,a){ return i===0 || v !== a[i-1]; });
+
+  var spans = [];
+  for (var i=0;i<cuts.length-1;i++){
+    var a = cuts[i], b = cuts[i+1];
+    var owner = null;
+    fixes.forEach(function(r){ if (r.t0<=a+0.5 && r.t1>=b-0.5) owner = r; });
+    var last = spans[spans.length-1];
+    if (last && last.fix === owner) last.t1 = b;
+    else spans.push({t0:a, t1:b, fix:owner});
+  }
+
+  var out = [];
+  spans.forEach(function(s){
+    if (!s.fix){
+      base.forEach(function(w){
+        var mid = (w.t0 + w.t1) / 2;
+        if (mid >= s.t0 - 0.001 && mid < s.t1 - 0.001) out.push(w);
+      });
+      return;
+    }
+    var toks = s.fix.value.split(/\s+/).filter(function(x){ return x.length; });
+    var span = s.t1 - s.t0;
+    toks.forEach(function(t, k){
+      out.push({
+        track: track,
+        t0: s.t0 + span*k/toks.length,
+        t1: s.t0 + span*(k+1)/toks.length,
+        text: t, fixed: true
+      });
+    });
+  });
+  return out;
+}
+
+// The words of one stretch of time, which is what a line shows.
+function wordsOfRange(track, t0, t1){
+  return trackWords(track).filter(function(w){
+    var mid = (w.t0 + w.t1) / 2;
+    return mid >= t0 - 0.001 && mid < t1 - 0.001;
+  });
+}
+
+function rangeText(track, t0, t1){
+  return wordsOfRange(track, t0, t1).map(function(w){ return w.text; }).join(' ');
+}
+
+function pieces(){
+  var out = [];
+  TRACKS.forEach(function(track){
+    var tw = trackWords(track);
+    turns.forEach(function(turn, ti){
+      if (turn.track !== track) return;
+
+      var marks = {};
+      marks[turn.t0] = 1;
+      marks[turn.t1] = 1;
+      revisions.forEach(function(r){
+        if (r.kind!=='speaker' || r.track!==track) return;
+        if (r.t1<=turn.t0 || r.t0>=turn.t1) return;
+        marks[Math.max(r.t0, turn.t0)] = 1;
+        marks[Math.min(r.t1, turn.t1)] = 1;
+      });
+      var pts = Object.keys(marks).map(Number).sort(function(a,b){ return a-b; });
+      var ws = tw.filter(function(w){
+        var mid = (w.t0 + w.t1) / 2;
+        return mid >= turn.t0 - 0.001 && mid < turn.t1 - 0.001;
+      });
+
+      var list = [];
+      for (var i=0;i<pts.length-1;i++){
+        var a = pts[i], b = pts[i+1];
+        // A word belongs to the piece its middle falls in, so a cut through a word
+        // never drops that word from the transcript.
+        var part = ws.filter(function(w){
+          var mid = (w.t0 + w.t1) / 2;
+          return mid >= a - 0.001 && mid < b - 0.001;
+        });
+        if (!part.length) continue;
+        var label = labelAt(track, (a+b)/2);
+        if (!label) continue;
+        var edited = false;
+        revisions.forEach(function(r){
+          if (r.kind!=='speaker' || r.track!==track) return;
+          if (r.t0<=a+0.5 && r.t1>=b-0.5){
+            var rl = resolveRef(r.value);
+            if (rl){ label = rl; edited = true; }
+          }
+        });
+        // The line starts at its own first word, not at the moment of the cut. That
+        // way the time on a line is the time of the word you hear first on it.
+        list.push({track:track, turn:ti, label:label,
+                   t0: part[0].t0, t1: part[part.length-1].t1,
+                   words:part, edited:edited});
+      }
+
+      // Fold neighbouring pieces of one line back together, so a change that no
+      // longer moves a speaker does not leave a seam behind.
+      var merged = [];
+      list.forEach(function(p){
+        var last = merged[merged.length-1];
+        if (last && last.label===p.label && Math.abs(last.t1 - p.t0) < 0.5){
+          last.t1 = p.t1;
+          last.words = last.words.concat(p.words);
+          last.edited = last.edited || p.edited;
+        } else {
+          merged.push(p);
+        }
+      });
+      out = out.concat(merged);
+    });
+  });
+  return out.sort(function(x,y){ return x.t0-y.t0 || (x.track<y.track?-1:1); });
+}
+
+function wordText(w){ return w.text; }
+
+/* ---------- small helpers ---------- */
+
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmt(ms){
+  var s = ms/1000, m = Math.floor(s/60), r = s - m*60;
+  return m + ':' + (r<10?'0':'') + r.toFixed(1);
+}
+function tc(track){ return track==='mic' ? 'mic' : 'sys'; }
+function leading(ws, n){
+  var t = ws.slice(0, n||6).map(function(w){ return wordText(w); }).join(' ');
+  return t + (ws.length > (n||6) ? ' …' : '');
+}
+function byId(id){ return document.getElementById(id); }
+
+/* ---------- rendering ---------- */
+
+function render(){
+  var ps = pieces();
+  renderBar(ps);
+  renderTranscript(ps);
+  renderPanel(ps);
+  renderLog();
+  renderBanner();
+}
+
+function peopleOf(ps){
+  var out = {};
+  TRACKS.forEach(function(track){ out[track] = []; });
+  ps.forEach(function(p){
+    var canon = identity(p.track, p.label);
+    var row = null;
+    out[p.track].forEach(function(r){ if (r.canon===canon) row = r; });
+    if (!row){ row = {canon:canon, label:p.label, pieces:[]}; out[p.track].push(row); }
+    row.pieces.push(p);
+  });
+  return out;
+}
+
+function renderBar(ps){
+  var people = peopleOf(ps);
+  var html = '';
+  TRACKS.forEach(function(track){
+    html += '<div class="trackrow"><span class="tl">' + TRACKLABEL[track] + '</span>';
+    if (!people[track].length) html += '<span class="cnt">no speech yet</span>';
+    people[track].forEach(function(person){
+      var name = nameOf(track, person.label);
+      var reopened = false;
+      revisions.forEach(function(r){
+        if (r.kind==='name' && r.track===track && resolveRef(r)===person.canon && r.rechecked) reopened = true;
+      });
+      var sel = selectedSpeaker && selectedSpeaker.track===track && selectedSpeaker.canon===person.canon;
+      var editing = renaming && renaming.track===track && renaming.canon===person.canon;
+      html += '<span class="chip' + (sel?' sel':'') + '" draggable="' + (editing ? 'false' : 'true') + '"'
+            + ' data-track="' + track + '" data-canon="' + esc(person.canon) + '"'
+            + ' title="Click to see when they spoke. Drag onto another name to merge.">'
+            + '<span class="dot ' + tc(track) + '"></span>';
+      if (editing){
+        html += '<input class="rn" value="' + esc(name) + '">';
+      } else {
+        html += '<span class="nm">' + esc(name) + '</span>'
+              + '<span class="cnt">' + person.pieces.length + '</span>'
+              + (reopened ? '<span class="recheck" title="Re-checked after the end-of-meeting pass">&#8635;</span>' : '')
+              + '<button class="pen" data-track="' + track + '" data-canon="' + esc(person.canon) + '"'
+              + ' title="Rename">&#9998;</button>';
+      }
+      html += '</span>';
+    });
+    html += '</div>';
+  });
+  byId('bar').innerHTML = html;
+
+  var bar = byId('bar');
+  var field = bar.querySelector ? bar.querySelector('.rn') : null;
+  if (field && field.focus){ field.focus(); if (field.select) field.select(); }
+}
+
+function renderTranscript(ps){
+  var html = '';
+  var lastEnd = -1;
+  ps.forEach(function(p){
+    if (lastEnd >= 0 && p.t0 - lastEnd > 400){
+      html += '<div class="gap">' + (Math.round((p.t0-lastEnd)/100)/10) + 's of silence</div>';
+    }
+    lastEnd = p.t1;
+
+    var name = nameOf(p.track, p.label);
+    var key = lineKey(p.track, p.t0, p.t1);
+    var editing = !!(editingLine && editingLine.key === key);
+    var textEdited = p.words.some(function(w){ return w.fixed; });
+    var flash = flashRange && p.t0 < flashRange.t1 && p.t1 > flashRange.t0;
+
+    html += '<div class="block ' + tc(p.track) + (flash?' flash':'') + (editing?' editing':'') + '">';
+    html += '<div class="hdr">'
+          + '<span class="time">[' + fmt(p.t0) + ']</span>'
+          + '<span class="tb ' + tc(p.track) + '">' + tc(p.track) + '</span>'
+          + '<button class="spk" data-track="' + p.track + '" data-t0="' + p.t0 + '" data-t1="' + p.t1 + '"'
+          + ' title="Reassign this line">' + esc(name) + '</button>';
+    if (p.edited) html += '<span class="edtag" title="You changed the speaker on this line">reassigned</span>';
+    if (textEdited) html += '<span class="edtag" title="You changed the words on this line">reworded</span>';
+    if (!editing){
+      html += '<button class="pen ln" data-track="' + p.track + '" data-t0="' + p.t0 + '" data-t1="' + p.t1 + '"'
+            + ' title="Fix the words on this line">&#9998;</button>';
+    }
+    html += '</div>';
+
+    if (editing){
+      html += '<div class="body editing"><textarea class="lntext" data-key="' + esc(key) + '"'
+            + ' spellcheck="false">' + esc(rangeText(p.track, p.t0, p.t1)) + '</textarea>'
+            + '<div class="lnhint">Enter saves the line. Escape drops the change.</div></div>';
+    } else {
+      html += '<div class="body">';
+      p.words.forEach(function(w){
+        html += '<span class="w' + (w.fixed ? ' fixed' : '') + '" data-track="' + w.track
+              + '" data-t0="' + w.t0 + '" data-t1="' + w.t1 + '">' + esc(w.text) + '</span> ';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+
+  html += '<div class="block open">'
+        + '<div class="hdr"><span class="time">[&hellip;]</span>'
+        + '<span class="tb ' + tc(OPEN_LINE.track) + '">' + tc(OPEN_LINE.track) + '</span>'
+        + '<span class="spk" style="cursor:default">' + esc(OPEN_LINE.label) + '</span>'
+        + '<span class="livetag">live, not settled</span></div>'
+        + '<div class="body">' + esc(OPEN_LINE.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
+        + '</div>';
+
+  byId('transcript').innerHTML = html;
+
+  // Put the caret in the open line editor, but leave the text as it is: the user
+  // is usually fixing one word, not retyping the line.
+  var host = byId('transcript');
+  var field = host.querySelector ? host.querySelector('.lntext') : null;
+  if (field && field.focus) field.focus();
+
+  if (flashRange){
+    var r = flashRange;
+    setTimeout(function(){ flashRange = null; render(); }, 900);
+  }
+}
+
+function renderPanel(ps){
+  if (!selectedSpeaker){ byId('panelcard').style.display = 'none'; return; }
+  byId('panelcard').style.display = 'block';
+  var track = selectedSpeaker.track;
+  var rows = ps.filter(function(p){
+    return p.track===track && identity(p.track,p.label)===selectedSpeaker.canon;
+  });
+  byId('paneltitle').textContent = nameOf(track, selectedSpeaker.canon) + ' — ' + TRACKLABEL[track];
+  var html = '';
+  rows.forEach(function(p){
+    html += '<li data-t0="' + p.t0 + '"><span class="pt">' + fmt(p.t0) + '</span>'
+          + '<span class="pv">' + esc(leading(p.words, 5)) + '</span></li>';
+  });
+  if (!rows.length) html = '<li><span class="pv empty">Nothing here.</span></li>';
+  byId('panel').innerHTML = html;
+}
+
+function describe(r){
+  if (r.kind==='speaker'){
+    return 'Reassigned ' + fmt(r.t0) + '–' + fmt(r.t1) + ' to '
+         + esc(nameOf(r.track, resolveRef(r.value) || r.value.label));
+  }
+  if (r.kind==='words') return 'Reworded the ' + fmt(r.t0) + ' line';
+  if (r.kind==='name') return 'Named ' + r.track + ' ' + resolveRef(r) + ' “' + esc(r.value) + '”';
+  if (r.kind==='merge'){
+    return 'Merged ' + r.track + ' ' + esc(resolveRef(r.drop) || r.drop.label)
+         + ' into ' + esc(resolveRef(r.keep) || r.keep.label);
+  }
+  return r.kind;
+}
+
+function renderLog(){
+  var html = '';
+  var list = revisions.slice().sort(function(a,b){ return b.n-a.n; });
+  list.forEach(function(r){
+    html += '<li><span class="rev">#' + r.n + '</span>'
+          + '<span class="rdesc">' + describe(r) + '</span>'
+          + '<button class="undo" data-n="' + r.n + '">undo</button></li>';
+  });
+  if (!list.length) html = '<li><span class="rdesc empty">No changes yet. The transcript is as the provider sent it.</span></li>';
+  byId('log').innerHTML = html;
+}
+
+function renderBanner(){
+  var b = byId('banner');
+  if (!bannerText){ b.className = 'banner'; b.textContent = ''; return; }
+  b.className = 'banner on';
+  b.textContent = bannerText;
+}
+
+/* ---------- popover ---------- */
+
+function hidePop(){
+  var p = byId('pop');
+  p.className = 'pop';
+  p.innerHTML = '';
+}
+
+// The popover is only about who spoke. Fixing the words happens on the line.
+function showPop(x, y, sel){
+  var pop = byId('pop');
+  var preview = sel.words.slice(0,7).map(function(w){ return w.text; }).join(' ');
+  var html = '<h4>Give <em>“' + esc(preview) + (sel.words.length>7?' …':'') + '”</em> to</h4>';
+  html += '<div class="popbtns">';
+  var seen = {};
+  var labels = [];
+  turns.forEach(function(t){
+    if (t.track===sel.track && labels.indexOf(t.label)<0) labels.push(t.label);
+  });
+  labels.forEach(function(label){
+    var canon = identity(sel.track, label);
+    if (nameOf(sel.track, label) === nameOf(sel.track, sel.currentLabel)) return;
+    if (seen[canon]) return;
+    seen[canon] = 1;
+    html += '<button class="mini" data-act="assign" data-label="' + esc(label) + '">'
+          + '<span class="dot ' + tc(sel.track) + '" style="display:inline-block;vertical-align:middle"></span> '
+          + esc(nameOf(sel.track,label)) + '</button>';
+  });
+  if (!labels.length) html += '<span class="popnote">Only one speaker on this track.</span>';
+  html += '</div>';
+  html += '<p class="popnote">To fix the words, use the pencil on the line.</p>';
+  pop.innerHTML = html;
+  pop.className = 'pop on';
+
+  var w = 250, h = pop.offsetHeight || 120;
+  var left = Math.min(x, window.innerWidth - w - 12);
+  var top = y + 10;
+  if (top + h > window.innerHeight - 12) top = Math.max(12, y - h - 10);
+  pop.style.left = Math.max(12,left) + 'px';
+  pop.style.top = top + 'px';
+
+  pop._sel = sel;
+}
+
+/* ---------- selection to a time range ---------- */
+
+function selectionToRange(){
+  var s = window.getSelection();
+  if (!s || s.isCollapsed || s.rangeCount===0) return null;
+  var range = s.getRangeAt(0);
+  var spans = document.querySelectorAll('#transcript .w');
+  var ws = [];
+  for (var i=0;i<spans.length;i++){
+    if (!range.intersectsNode(spans[i])) continue;
+    ws.push({
+      track: spans[i].getAttribute('data-track'),
+      t0: Number(spans[i].getAttribute('data-t0')),
+      t1: Number(spans[i].getAttribute('data-t1')),
+      text: spans[i].textContent
+    });
+  }
+  if (!ws.length) return null;
+  var track = ws[0].track;
+  for (var j=0;j<ws.length;j++){
+    if (ws[j].track !== track) return {crossTrack:true};
+  }
+  var t0 = Math.min.apply(null, ws.map(function(w){ return w.t0; }));
+  var t1 = Math.max.apply(null, ws.map(function(w){ return w.t1; }));
+  return {track:track, t0:t0, t1:t1, words:ws, currentLabel:labelAt(track,(t0+t1)/2)};
+}
+
+/* ---------- edits ---------- */
+
+function addSpeaker(track, t0, t1, label){
+  if (t1 - t0 < 1) return;
+  if (labelAt(track,(t0+t1)/2) === label && !revisions.some(function(r){
+        return r.kind==='speaker' && r.track===track && Math.abs(r.t0-t0)<1 && Math.abs(r.t1-t1)<1;
+      })) return;
+  revisions.push({n: nextN++, kind:'speaker', track:track, t0:t0, t1:t1, value: refOf(track,label)});
+  flashRange = {t0:t0, t1:t1};
+  render();
+}
+
+// A change to the words covers the line the user was editing and carries its new
+// text. The new words take times spread across that line, so they stay on the clock.
+function setLineText(track, t0, t1, value){
+  value = (value || '').replace(/\s+/g, ' ').trim();
+  if (!value || value === rangeText(track, t0, t1)) return;
+  revisions.push({n: nextN++, kind:'words', track: track, t0: t0, t1: t1, value: value});
+  render();
+}
+
+function lineKey(track, t0, t1){ return track + '|' + t0 + '|' + t1; }
+
+/* ---------- events ---------- */
+
+byId('transcript').addEventListener('click', function(e){
+  var pen = e.target.closest ? e.target.closest('.pen.ln') : null;
+  if (pen){
+    var track = pen.getAttribute('data-track');
+    var t0 = Number(pen.getAttribute('data-t0'));
+    var t1 = Number(pen.getAttribute('data-t1'));
+    var key = lineKey(track, t0, t1);
+    editingLine = (editingLine && editingLine.key === key)
+      ? null
+      : {key: key, track: track, t0: t0, t1: t1};
+    hidePop();
+    render();
+    return;
+  }
+  var spk = e.target.closest ? e.target.closest('.spk') : null;
+  if (!spk || spk.disabled) return;
+  var track = spk.getAttribute('data-track');
+  var t0 = Number(spk.getAttribute('data-t0'));
+  var t1 = Number(spk.getAttribute('data-t1'));
+  var hit = null;
+  pieces().forEach(function(p){
+    if (p.track===track && p.t0===t0 && p.t1===t1) hit = p;
+  });
+  if (!hit || !hit.words.length) return;
+  var rect = spk.getBoundingClientRect();
+  showPop(rect.left, rect.bottom, {
+    track: track, t0:t0, t1:t1, words: hit.words, currentLabel: labelAt(track,(t0+t1)/2)
+  });
+});
+
+// The line editor. Enter saves, Escape drops the change, and clicking away saves.
+// The field carries the key of the line it belongs to, so a field that is about to
+// be thrown away never saves into the line that replaced it.
+function editorOwns(target){
+  if (!editingLine) return false;
+  if (!target.classList || !target.classList.contains('lntext')) return false;
+  return target.getAttribute('data-key') === editingLine.key;
+}
+
+function saveLineEditor(value){
+  var open = editingLine;
+  editingLine = null;
+  if (!open) return;
+  setLineText(open.track, open.t0, open.t1, value);
+}
+
+byId('transcript').addEventListener('keydown', function(e){
+  if (!editorOwns(e.target)) return;
+  if (e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    saveLineEditor(e.target.value);
+  } else if (e.key === 'Escape'){
+    e.preventDefault();
+    editingLine = null;
+    render();
+  }
+});
+
+byId('transcript').addEventListener('focusout', function(e){
+  if (!editorOwns(e.target)) return;
+  saveLineEditor(e.target.value);
+});
+
+// A double click is just a selection of one word, so the mouseup handler above
+// already covers it. It used to have its own handler, and the two raced: this one
+// focused the text field, the field took focus away from the page, and the
+// mouseup check that ran a moment later saw no selection and closed the popover.
+
+byId('transcript').addEventListener('mouseup', function(e){
+  if (e.target.closest && e.target.closest('#pop')) return;
+  setTimeout(function(){
+    var sel = selectionToRange();
+    if (!sel) { hidePop(); return; }
+    if (sel.crossTrack){
+      var pop = byId('pop');
+      pop.innerHTML = '<h4>Pick words from one track.</h4>'
+                    + '<p class="hint" style="margin:0">The mic and system audio are labelled apart, '
+                    + 'so they can’t be reassigned together.</p>';
+      pop.className = 'pop on';
+      pop.style.left = Math.min(e.clientX, window.innerWidth-262) + 'px';
+      pop.style.top = (e.clientY+12) + 'px';
+      pop._sel = null;
+      return;
+    }
+    var s = window.getSelection();
+    var rect = s.getRangeAt(0).getBoundingClientRect();
+    showPop(rect.left, rect.bottom, sel);
+  }, 0);
+});
+
+document.addEventListener('mousedown', function(e){
+  if (e.target.closest && (e.target.closest('#pop') || e.target.closest('.spk') || e.target.closest('.w'))) return;
+  hidePop();
+});
+
+byId('pop').addEventListener('click', function(e){
+  var btn = e.target.closest ? e.target.closest('button[data-act]') : null;
+  if (!btn) return;
+  var sel = byId('pop')._sel;
+  if (!sel) return;
+  if (btn.getAttribute('data-act')==='assign'){
+    addSpeaker(sel.track, sel.t0, sel.t1, btn.getAttribute('data-label'));
+    var s = window.getSelection();
+    if (s) s.removeAllRanges();
+    hidePop();
+  }
+});
+
+byId('pop').addEventListener('keydown', function(e){
+  if (e.key==='Escape'){ e.preventDefault(); hidePop(); }
+});
+
+/* speaker bar: click to open the panel, pen to rename, drag to merge */
+
+function labelFor(track, canon){
+  var label = null;
+  turns.forEach(function(t){
+    if (t.track===track && identity(t.track, t.label)===canon) label = t.label;
+  });
+  return label;
+}
+
+function commitRename(value){
+  var r = renaming;
+  renaming = null;
+  if (!r) return;
+  value = (value || '').trim();
+  var label = labelFor(r.track, r.canon);
+  if (!value || !label || value === nameOf(r.track, label)){ render(); return; }
+  revisions.push({n: nextN++, kind:'name', track:r.track, label:label,
+                  anchor:firstSight(r.track, label), value:value});
+  render();
+}
+
+byId('bar').addEventListener('click', function(e){
+  var pen = e.target.closest ? e.target.closest('.pen') : null;
+  if (pen){
+    e.stopPropagation();
+    renaming = {track: pen.getAttribute('data-track'), canon: pen.getAttribute('data-canon')};
+    render();
+    return;
+  }
+  if (e.target.classList && e.target.classList.contains('rn')) return;
+  var chip = e.target.closest ? e.target.closest('.chip') : null;
+  if (!chip) return;
+  var track2 = chip.getAttribute('data-track');
+  var canon2 = chip.getAttribute('data-canon');
+  if (selectedSpeaker && selectedSpeaker.track===track2 && selectedSpeaker.canon===canon2){
+    selectedSpeaker = null;
+  } else {
+    selectedSpeaker = {track: track2, canon: canon2};
+  }
+  render();
+});
+
+byId('bar').addEventListener('keydown', function(e){
+  if (!renaming) return;
+  if (e.key==='Enter'){ e.preventDefault(); commitRename(e.target.value); }
+  else if (e.key==='Escape'){ e.preventDefault(); renaming = null; render(); }
+});
+
+byId('bar').addEventListener('focusout', function(e){
+  if (!renaming) return;
+  if (e.target.classList && e.target.classList.contains('rn')) commitRename(e.target.value);
+});
+
+var dragPayload = null;
+byId('bar').addEventListener('dragstart', function(e){
+  var chip = e.target.closest ? e.target.closest('.chip') : null;
+  if (!chip) return;
+  dragPayload = {track: chip.getAttribute('data-track'), canon: chip.getAttribute('data-canon')};
+  if (e.dataTransfer){
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', chip.getAttribute('data-canon'));
+  }
+});
+byId('bar').addEventListener('dragover', function(e){
+  if (dragPayload && e.target.closest && e.target.closest('.chip')) e.preventDefault();
+});
+byId('bar').addEventListener('drop', function(e){
+  var chip = e.target.closest ? e.target.closest('.chip') : null;
+  if (!chip || !dragPayload) return;
+  e.preventDefault();
+  var toTrack = chip.getAttribute('data-track');
+  var toCanon = chip.getAttribute('data-canon');
+  var fromTrack = dragPayload.track;
+  var fromCanon = dragPayload.canon;
+  dragPayload = null;
+  if (fromTrack !== toTrack){
+    bannerText = 'The two tracks are labelled apart, so a name on the mic track cannot merge with a name '
+               + 'on the system track. Merge within one track only.';
+    renderBanner();
+    return;
+  }
+  if (fromCanon === toCanon) return;
+  var keepLabel = null, dropLabel = null;
+  turns.forEach(function(t){
+    if (t.track!==toTrack) return;
+    if (identity(t.track,t.label)===toCanon) keepLabel = t.label;
+    if (identity(t.track,t.label)===fromCanon) dropLabel = t.label;
+  });
+  if (!keepLabel || !dropLabel) return;
+  revisions.push({
+    n: nextN++, kind:'merge', track:toTrack,
+    keep: refOf(toTrack, keepLabel), drop: refOf(toTrack, dropLabel)
+  });
+  if (selectedSpeaker && selectedSpeaker.track===toTrack) selectedSpeaker = {track:toTrack, canon:toCanon};
+  render();
+});
+
+byId('panel').addEventListener('click', function(e){
+  var li = e.target.closest ? e.target.closest('li[data-t0]') : null;
+  if (!li) return;
+  var t0 = Number(li.getAttribute('data-t0'));
+  var ps = pieces();
+  var hit = null;
+  ps.forEach(function(p){ if (p.t0===t0) hit = p; });
+  if (!hit) return;
+  flashRange = {t0: hit.t0, t1: hit.t1};
+  render();
+});
+
+// Undo drops one revision and rebuilds everything from the rest, which is the
+// rule the README sets: replay the list without that revision.
+function undoRevision(n){
+  revisions = revisions.filter(function(r){ return r.n !== n; });
+  render();
+}
+
+byId('log').addEventListener('click', function(e){
+  var btn = e.target.closest ? e.target.closest('.undo') : null;
+  if (!btn) return;
+  undoRevision(Number(btn.getAttribute('data-n')));
+});
+
+function runBatch(){
+  turns = turns.map(function(t){
+    var labels = [];
+    turns.forEach(function(x){
+      if (x.track===t.track && labels.indexOf(x.label)<0) labels.push(x.label);
+    });
+    if (labels.length < 2) return {track:t.track, label:t.label, t0:t.t0, t1:t.t1, text:t.text};
+    labels.sort();
+    var rot = labels.slice().reverse();
+    return {track:t.track, label:rot[labels.indexOf(t.label)], t0:t.t0, t1:t.t1, text:t.text};
+  });
+  revisions.forEach(function(r){ if (r.kind==='name') r.rechecked = true; });
+  bannerText = 'The end-of-meeting pass re-labelled every speaker, so “S1” and “S2” now mean different voices. '
+             + 'Your names, merges, and reassignments stayed with the voice they were set on, matched by the '
+             + 'time that voice first spoke. Check any name marked with ↻.';
+  render();
+}
+
+byId('batch').addEventListener('click', runBatch);
+
+byId('reset').addEventListener('click', function(){
+  turns = BASE_TURNS.map(function(t){ var c={}; for (var k in t) c[k]=t[k]; return c; });
+  revisions = [];
+  nextN = 1;
+  selectedSpeaker = null;
+  editingLine = null;
+  renaming = null;
+  flashRange = null;
+  bannerText = null;
+  buildWords();
+  render();
+});
+
+render();
+
+})();
+</script>
+</body>
+</html>
