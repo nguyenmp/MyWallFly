@@ -102,7 +102,7 @@ swift run wallfly-transcribe --out notes.txt     # one transcript file, no audio
 
 The service settles a turn in pieces, every second or two. Each piece joins the line above it, so one turn still reads as one line, and the line is rewritten in place as it grows. Nothing is appended for it, and the file does not grow while one line is being spoken.
 
-A line ends when the speaker changes, or after a pause. That is when its timestamp is fixed and the next line starts below it.
+A line ends when the speaker changes, or after a pause. That is when its timestamp is fixed and the next line starts below it. A short silence does not end the line: when the same speaker carries on within three seconds, the words stay on the line above.
 
 The open line, the one with the `…`, holds only the words that have not settled. The service trims the words it has already committed off the front of each partial, so only the new ones show, using the word times to tell them apart. The settled words are already in the line above. Nothing is lost and nothing repeats.
 

@@ -573,8 +573,10 @@ function renderBar(ps){
 function renderTranscript(ps){
   var html = '';
   var lastEnd = -1;
+  // Only call out a real pause. The gap must be longer than this, in ms.
+  var silenceGapMs = 3000;
   ps.forEach(function(p){
-    if (lastEnd >= 0 && p.t0 - lastEnd > 400){
+    if (lastEnd >= 0 && p.t0 - lastEnd > silenceGapMs){
       html += '<div class="gap">' + (Math.round((p.t0-lastEnd)/100)/10) + 's of silence</div>';
     }
     lastEnd = p.t1;

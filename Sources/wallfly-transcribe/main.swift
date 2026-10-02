@@ -474,6 +474,9 @@ final class SegmentPrinter: @unchecked Sendable {
     private var stamp: Double = 0
     /// When its settled words ended, so a pause can end it.
     private var lastEnd: Double = 0
+    /// How long a silence between two pieces may last and still keep one
+    /// speaker's words on the same line. A longer gap starts a new line.
+    private static let silenceGapTolerance: Double = 3
     /// The words still being spoken, shown after the settled ones.
     private var draft: String?
 
@@ -495,8 +498,8 @@ final class SegmentPrinter: @unchecked Sendable {
 
         lock.lock(); defer { lock.unlock() }
         // A settled piece joins the line above when the same speaker carries on
-        // without a pause. Otherwise that line is finished.
-        if settled != nil && key == owner && segment.start - lastEnd < 0.2 {
+        // through a short silence. Otherwise that line is finished.
+        if settled != nil && key == owner && segment.start - lastEnd < Self.silenceGapTolerance {
             settled = (settled ?? "") + " " + segment.text
         } else {
             commit()
