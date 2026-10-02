@@ -609,7 +609,7 @@ function renderTranscript(ps){
     html += '<div class="block open">'
           + '<div class="hdr"><span class="time">[&hellip;]</span>'
           + '<span class="tb ' + tc(line.track) + '">' + tc(line.track) + '</span>'
-          + '<span class="spk" style="cursor:default">' + esc(line.label) + '</span>'
+          + '<span class="spk" style="cursor:default">' + esc(nameOf(line.track, line.label)) + '</span>'
           + '<span class="livetag">live, not settled</span></div>'
           + '<div class="body">' + esc(line.text) + ' <span style="color:#a9a29a">&hellip;</span></div>'
           + '</div>';
