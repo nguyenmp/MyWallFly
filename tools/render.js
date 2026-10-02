@@ -6,6 +6,10 @@
 // A saved transcript is one line per turn. This reads it, works out when each
 // turn ended, and swaps the page's data block for the real thing. The page
 // itself is never copied, so there is only ever one copy of it to keep up.
+//
+// The changes made on the page are kept beside the transcript in edits.json.
+// When that file is there it goes into the page too, so the names, merges, and
+// reassignments come back with the transcript.
 
 const fs = require('fs');
 const path = require('path');
@@ -61,6 +65,19 @@ function addEnds(turns){
   return turns;
 }
 
+// The changes the reader made on the page, if the run kept them.
+function readEdits(near){
+  const file = path.join(path.dirname(path.resolve(near)), 'edits.json');
+  if (!fs.existsSync(file)) return null;
+  try {
+    const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(list) && list.length ? list : null;
+  } catch (err) {
+    console.error('could not read ' + file + ': ' + err.message);
+    return null;
+  }
+}
+
 function main(){
   const source = process.argv[2];
   if (!source){
@@ -71,6 +88,7 @@ function main(){
   const data = parse(text);
   addEnds(data.turns);
   data.open = data.open || null;
+  data.edits = readEdits(source);
   data.label = path.basename(path.dirname(path.resolve(source))) || 'sample data';
   data.turns = data.turns.map(t => ({
     track: t.track, label: t.label, t0: t.t0, t1: t.t1, text: t.text
@@ -100,6 +118,7 @@ function main(){
   console.log('span       ' + Math.round(last / 60000) + ' minutes');
   console.log('longest    ' + longest + ' characters on one line');
   console.log('live line  ' + (data.open ? 'yes' : 'no'));
+  console.log('changes    ' + (data.edits ? data.edits.length : 'none kept'));
   console.log('wrote      ' + out);
 }
 

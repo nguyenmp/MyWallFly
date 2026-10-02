@@ -132,6 +132,20 @@ Each track goes to its own stream, so the service diarizes each input on its own
 
 Two streams at once uses the whole Speechmatics trial quota, which allows two. Mixing the tracks instead is still an open question below.
 
+### Open a saved meeting
+
+A run keeps its transcript and its changes on disk. To look at that meeting again:
+
+```sh
+node tools/render.js 2026-10-02T18-33-44Z/transcript.txt
+```
+
+It writes `2026-10-02T18-33-44Z/2026-10-02T18-33-44Z-page.html`: a copy of the page with the meeting already in it. Open that file in a browser. Give a second path to write the page somewhere else.
+
+The tool reads `edits.json` from the same folder, so the names, merges, and reassignments come back with the transcript. It says how many it found.
+
+The copy is not live and cannot save. A change made in it is lost on reload. It is for reading a meeting back, not for fixing one.
+
 ### Run the checks
 
 ```sh
@@ -296,7 +310,7 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `tools/render.js`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 

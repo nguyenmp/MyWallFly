@@ -209,7 +209,7 @@ window.WALLFLY_DATA = {
 var TRACKS = ['mic','system'];
 var TRACKLABEL = {mic:'mic', system:'system'};
 
-var DATA = window.WALLFLY_DATA || { turns: [], open: null };
+var DATA = window.WALLFLY_DATA || { turns: [], open: null, edits: null };
 // Set when a run serves this page and streams the transcript to it. Without it
 // the page is a mockup reading sample data from the file.
 var LIVE = window.WALLFLY_LIVE || null;
@@ -236,6 +236,22 @@ var interacting = false;
 var pendingRender = false;
 
 buildWords();
+
+// Takes a list of changes that the run, or a saved transcript, handed back. The
+// list is the whole edit state, so it replaces whatever is here.
+function loadEdits(raw){
+  try {
+    var kept = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+    if (Object.prototype.toString.call(kept) !== '[object Array]' || !kept.length) return false;
+    revisions = kept;
+    nextN = 1;
+    revisions.forEach(function(r){ if (r && r.n >= nextN) nextN = r.n + 1; });
+    return true;
+  } catch (err) { /* a damaged list must not stop the page */ return false; }
+}
+
+// A saved transcript carries the changes made on it, so they come back with it.
+if (!LIVE) loadEdits(DATA.edits);
 
 function buildWords(){
   words = [];
@@ -1164,14 +1180,7 @@ function connectLive(){
     // reconnect cannot undo an edit made a moment ago.
     if (!editsLoaded){
       editsLoaded = true;
-      try {
-        var kept = JSON.parse(data.edits || '[]');
-        if (Object.prototype.toString.call(kept) === '[object Array]' && kept.length){
-          revisions = kept;
-          nextN = 1;
-          revisions.forEach(function(r){ if (r && r.n >= nextN) nextN = r.n + 1; });
-        }
-      } catch (err) { /* a damaged list must not stop the page */ }
+      loadEdits(data.edits);
     }
     refresh();
   });
