@@ -134,17 +134,23 @@ Two streams at once uses the whole Speechmatics trial quota, which allows two. M
 
 ### Open a saved meeting
 
-A run keeps its transcript and its changes on disk. To look at that meeting again:
+A run keeps everything about a meeting in one folder. To read that meeting back and fix it:
 
 ```sh
-node tools/render.js 2026-10-02T18-33-44Z/transcript.txt
+swift run wallfly-open 2026-10-02T18-33-44Z
 ```
 
-It writes `2026-10-02T18-33-44Z/2026-10-02T18-33-44Z-page.html`: a copy of the page with the meeting already in it. Open that file in a browser. Give a second path to write the page somewhere else.
+It serves the page and opens it, the same way a live run does. The same gestures work, and so does saving: a change goes straight back to that folder's `edits.json`. The difference is where the lines come from — a folder, not a microphone. Every line is settled, so every line takes edits.
 
-The tool reads `edits.json` from the same folder, so the names, merges, and reassignments come back with the transcript. It says how many it found.
+The folder holds three files:
 
-The copy is not live and cannot save. A change made in it is lost on reload. It is for reading a meeting back, not for fixing one.
+- `transcript.txt` — the transcript a person reads.
+- `turns.jsonl` — the same turns, one per line, for the app to read back exactly.
+- `edits.json` — the changes made on the page.
+
+A folder from before `turns.jsonl` existed still opens. The transcript is read instead, and the end of each line is guessed. The command says which it used.
+
+`--no-open` prints the address without opening a browser. `--port` pins the port.
 
 ### Run the checks
 
@@ -310,7 +316,7 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `tools/render.js`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `wallfly-open`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
 
 ## Next step
 

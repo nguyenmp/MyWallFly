@@ -90,6 +90,67 @@ struct LivePageTests {
         #expect(opening.contains("event: reset"))
         #expect(opening.contains("Sam"))
     }
+
+    @Test("a recorded meeting is served with its turns, and says it is saved")
+    func servesASavedMeeting() async throws {
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wallfly-saved-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "{\"track\":\"mic\",\"label\":\"S1\",\"t0\":0,\"t1\":1000,\"text\":\"Hello there\"}\n"
+            .write(to: folder.appendingPathComponent("turns.jsonl"), atomically: true, encoding: .utf8)
+
+        let meeting = try SavedMeeting.load(from: folder)
+        let (page, url) = try LivePage.start(banner: meeting.label,
+                                             editsURL: meeting.editsURL,
+                                             restoring: meeting.turns)
+        defer { page.stop() }
+
+        // The page is told this is a saved meeting, not a live one.
+        let (data, _) = try await URLSession.shared.data(from: url)
+        #expect(String(decoding: data, as: UTF8.self).contains("\"saved\": true"))
+
+        // A page that opens gets the recorded turns, and no line is still open.
+        let socket = try Socket(port: UInt16(url.port ?? 0))
+        defer { socket.shut() }
+        let opening = await socket.readForAWhile()
+        #expect(opening.contains("Hello there"))
+        #expect(opening.contains("\"ended\":true"))
+    }
+
+    @Test("a run keeps a record of the turns it settled, and it reads back")
+    func writesTheTurnRecord() async throws {
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("wallfly-record-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let record = folder.appendingPathComponent("turns.jsonl")
+
+        let (page, _) = try LivePage.start(banner: "test run", turnsURL: record)
+        defer { page.stop() }
+
+        page.show(TranscriptionEvent(track: .microphone,
+                                     segment: TranscriptSegment(speaker: "S1", start: 1, end: 3,
+                                                                text: "Hello there", isFinal: true)))
+
+        // The write happens on the server's queue, so give it a moment.
+        var written: String?
+        for _ in 0..<50 {
+            if let text = try? String(contentsOf: record, encoding: .utf8), !text.isEmpty {
+                written = text; break
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(written?.contains("Hello there") == true)
+
+        // Reading it back gives the same turn, word for word and time for time.
+        let turns = try SavedMeeting.load(from: folder).turns
+        #expect(turns.count == 1)
+        #expect(turns[0].track == "mic")
+        #expect(turns[0].t0 == 1000)
+        #expect(turns[0].t1 == 3000)
+        #expect(turns[0].text == "Hello there")
+    }
 }
 
 /// A plain TCP client. Reading the raw bytes shows exactly what the server sends

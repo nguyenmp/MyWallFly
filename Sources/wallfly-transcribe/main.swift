@@ -200,6 +200,10 @@ guard let handle = FileHandle(forWritingAtPath: transcriptPath) else {
 try? handle.truncate(atOffset: 0)
 transcriptFile = handle
 Console.note("transcript: \(transcriptPath)")
+if let runFolder {
+    Console.note("record:     \(runFolder.appendingPathComponent("turns.jsonl").path)")
+    Console.note("changes:    \(runFolder.appendingPathComponent("edits.json").path)")
+}
 if !finalOnly {
     Console.note("one line is kept open for the words still being spoken, and rewritten as they change.")
 }
@@ -215,10 +219,13 @@ let pageBanner = runFolder?.lastPathComponent
 var live: LivePage?
 do {
     // Keep the page's changes beside the transcript, so a reload or a crash does
-    // not lose them. A run with a plain transcript file and no folder keeps them
-    // in memory only.
+    // not lose them. The record of the settled turns goes there too, so the
+    // meeting can be opened again later. A run with a plain transcript file and
+    // no folder keeps its changes in memory only.
     let editsURL = runFolder?.appendingPathComponent("edits.json")
-    let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort, editsURL: editsURL)
+    let turnsURL = runFolder?.appendingPathComponent("turns.jsonl")
+    let (page, url) = try LivePage.start(banner: pageBanner, port: pagePort,
+                                         editsURL: editsURL, turnsURL: turnsURL)
     live = page
     Console.note("page:       \(url.absoluteString)")
     if !arguments.contains("--no-open") {

@@ -62,6 +62,36 @@ public enum TranscriptPage {
     }
 }
 
+/// The record of what the provider settled, one line per piece.
+///
+/// The page talks JSON, so the record does too: one `LiveTurn` per line, in the
+/// order they settled. A saved meeting reads it back, which gives exactly the
+/// turns the run had. The matching `transcript.txt` stays human-readable; this is
+/// the copy the app reads.
+///
+/// One line per piece means a long meeting never rewrites the file, and a crash
+/// keeps every line written before it.
+private final class TurnRecord {
+    private let handle: FileHandle
+
+    init(url: URL) throws {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try? handle.truncate(atOffset: 0)
+        self.handle = handle
+    }
+
+    func append(_ turn: LiveTurn) {
+        guard var line = try? JSONEncoder().encode(turn) else { return }
+        line.append(0x0A)
+        try? handle.write(contentsOf: line)
+    }
+
+    func close() {
+        try? handle.close()
+    }
+}
+
 /// Serves the transcript page on the loopback address and pushes new lines to it
 /// as they arrive.
 ///
@@ -117,9 +147,16 @@ public final class LivePageServer: @unchecked Sendable {
     private let pageHTML: Data
     private let banner: String?
     private let requestedPort: UInt16
+    /// True when this server is serving a meeting that was already recorded, so
+    /// the page says so and shows no live line.
+    private let isSavedPage: Bool
     /// Where the page's changes are kept between page loads. Nil when the run has
     /// no folder, and the changes then last only as long as the run itself.
     private let editsURL: URL?
+    /// Where the record of what the provider settled is kept. Nil when this
+    /// server is serving a meeting that was already recorded.
+    private let turnsURL: URL?
+    private var turnsFile: TurnRecord?
     /// Made on first use, so it lands on the same queue as everything else.
     private lazy var keepAlive = DispatchSource.makeTimerSource(queue: queue)
     private let encoder = JSONEncoder()
@@ -128,14 +165,29 @@ public final class LivePageServer: @unchecked Sendable {
     private var clients: [UUID: NWConnection] = [:]
     private var state = PageState(turns: [], open: [], ended: false)
 
-    public init(banner: String? = nil, port: UInt16 = 0, editsURL: URL? = nil) throws {
+    public init(banner: String? = nil, port: UInt16 = 0,
+                editsURL: URL? = nil, turnsURL: URL? = nil,
+                restoring: [LiveTurn]? = nil) throws {
         self.pageHTML = try TranscriptPage.html()
         self.banner = banner
         self.requestedPort = port
         self.editsURL = editsURL
+        self.turnsURL = turnsURL
+        self.isSavedPage = restoring != nil
         // A run in this folder has been here before. Pick up the changes it left.
         if let editsURL, let saved = try? Data(contentsOf: editsURL) {
             self.state.edits = String(decoding: saved, as: UTF8.self)
+        }
+        // A meeting read back from a folder starts with the turns it recorded,
+        // and no line is still being spoken.
+        if let restoring {
+            self.state.turns = restoring
+            self.state.ended = true
+        }
+        // The record of a live run. A run that fails to open it still works: a
+        // saved meeting then falls back to reading the transcript.
+        if let turnsURL {
+            self.turnsFile = try? TurnRecord(url: turnsURL)
         }
     }
 
@@ -190,6 +242,8 @@ public final class LivePageServer: @unchecked Sendable {
             listener = nil
             for connection in clients.values { connection.cancel() }
             clients.removeAll()
+            turnsFile?.close()
+            turnsFile = nil
         }
     }
 
@@ -200,6 +254,8 @@ public final class LivePageServer: @unchecked Sendable {
         queue.async { [self] in
             state.turns.append(turn)
             state.open.removeAll { $0.track == turn.track }
+            // Keep the record too, so a saved meeting reopens exactly.
+            turnsFile?.append(turn)
             broadcast(.turn, turn)
         }
     }
@@ -340,7 +396,8 @@ public final class LivePageServer: @unchecked Sendable {
     /// The file on disk is never changed.
     private func page() -> Data {
         guard let banner, let marker = pageHTML.range(of: Data("</head>".utf8)) else { return pageHTML }
-        let script = "<script>window.WALLFLY_LIVE = {\"label\": \(jsonString(banner))};</script>\n"
+        let script = "<script>window.WALLFLY_LIVE = {\"label\": \(jsonString(banner)),"
+                   + " \"saved\": \(isSavedPage)};</script>\n"
         var out = Data()
         out.append(pageHTML[..<marker.lowerBound])
         out.append(Data(script.utf8))
@@ -443,8 +500,10 @@ public final class LivePage: @unchecked Sendable {
 
     /// Loads the page and starts the server. Returns the address to open.
     public static func start(banner: String? = nil, port: UInt16 = 0,
-                             editsURL: URL? = nil) throws -> (page: LivePage, url: URL) {
-        let server = try LivePageServer(banner: banner, port: port, editsURL: editsURL)
+                             editsURL: URL? = nil, turnsURL: URL? = nil,
+                             restoring: [LiveTurn]? = nil) throws -> (page: LivePage, url: URL) {
+        let server = try LivePageServer(banner: banner, port: port, editsURL: editsURL,
+                                        turnsURL: turnsURL, restoring: restoring)
         let url = try server.start()
         return (LivePage(server: server), url)
     }

@@ -1221,8 +1221,9 @@ function connectLive(){
 if (LIVE){
   var liveLabel = LIVE.label || 'this run';
   document.title = 'MyWallFly — ' + liveLabel;
-  byId('subtitle').textContent = 'Live. ' + liveLabel
-    + '. Lines land here as people speak. Your changes are kept with the run.';
+  byId('subtitle').textContent = LIVE.saved
+    ? 'Saved meeting. ' + liveLabel + '. Every line is settled, so every line takes edits. Your changes are kept in the run folder.'
+    : 'Live. ' + liveLabel + '. Lines land here as people speak. Your changes are kept with the run.';
   // Both buttons belong to the mockup: one wipes the transcript, the other
   // scrambles the speaker names.
   byId('reset').style.display = 'none';

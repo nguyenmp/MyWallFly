@@ -47,6 +47,12 @@ let package = Package(
             dependencies: ["WallFlyCapture", "WallFlyTranscribe"],
             path: "Sources/wallfly-transcribe"
         ),
+        // A recorded meeting, served the same way, for reading back and fixing.
+        .executableTarget(
+            name: "wallfly-open",
+            dependencies: ["WallFlyTranscribe"],
+            path: "Sources/wallfly-open"
+        ),
         .testTarget(
             name: "WallFlyCaptureTests",
             dependencies: ["WallFlyCapture"],
