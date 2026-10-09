@@ -9,7 +9,9 @@ import WallFlyTranscribe
 //   swift run wallfly-transcribe                  run until you press Ctrl-C
 //   swift run wallfly-transcribe 60               stop by itself after 60 seconds
 //   swift run wallfly-transcribe mic-only         microphone only, one stream
-//   swift run wallfly-transcribe --file clip.wav  replay a recording, no microphone
+//   swift run wallfly-transcribe --file clip.wav  transcribe a recording, no microphone
+//   swift run wallfly-transcribe --file clip.wav --replay
+//                                                 play it through the live pipe instead
 //   swift run wallfly-transcribe --out runs/one   write into that folder instead
 //   swift run wallfly-transcribe --out notes.txt  one transcript file, no audio
 //   swift run wallfly-transcribe --final-only     do not follow the words being spoken
@@ -245,9 +247,65 @@ do {
     Console.note("no live page this run: \(error)")
 }
 
-// MARK: - Replay a recording
+// MARK: - A file goes to the batch service
 
-if let filePath = value(after: "--file", in: arguments) {
+/// A recording already exists, so there is nothing to wait for: `--file` sends
+/// the whole thing to the batch service and prints the result when it lands. An
+/// hour of audio comes back in minutes instead of taking an hour.
+///
+/// `--replay` keeps the old behaviour and pushes the file through the live pipe
+/// at real time, which is the only way to check the live path without a
+/// microphone.
+///
+/// The batch result is the tighter one, so this is also the pass that is meant
+/// to replace the live speaker labels. Today it prints its own transcript, and
+/// nothing merges the two yet.
+let replayThroughTheLivePipe = arguments.contains("--replay")
+
+if let filePath = value(after: "--file", in: arguments), !replayThroughTheLivePipe {
+    let url = URL(fileURLWithPath: filePath)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        Console.err("No file at \(filePath).\n")
+        exit(1)
+    }
+
+    // No speaker cap here: the batch settings refuse `max_speakers`, unlike the
+    // real-time ones. `--max-speakers` still applies to a live run.
+    let batchConfiguration = SpeechmaticsBatchConfig(apiKey: apiKey, region: region)
+    Console.note("Batch: \(filePath) → \(region.batchHost), nothing replayed in real time")
+    let batchClient = SpeechmaticsBatchClient(config: batchConfiguration)
+    do {
+        let segments = try await batchClient.transcribe(fileAt: url) { step in
+            Console.note("  \(step)")
+        }
+        for segment in segments {
+            let line = "[\(String(format: "%7.2f", segment.start))s] "
+                     + "\(segment.speaker ?? "??"): \(segment.text)"
+            Console.line(line)
+            try? transcriptFile?.write(contentsOf: Data((line + "\n").utf8))
+            live?.show(TranscriptionEvent(track: .microphone, segment: segment))
+        }
+        Console.note("")
+        Console.note("\(segments.count) lines from \(filePath)")
+        live?.note("Batch done: \(segments.count) lines")
+        live?.finish()
+    } catch {
+        live?.note("Batch transcription failed: \(error)", level: "problem")
+        live?.finish()
+        Console.err("Batch transcription failed: \(error)\n")
+        exit(1)
+    }
+    live?.stop()
+    try? transcriptFile?.close()
+    exit(0)
+}
+
+// MARK: - Replay a recording through the live pipe
+
+/// `--replay` only: feeds the file to the same real-time stream a meeting uses,
+/// one 20 ms frame at a time, at the pace they were recorded. A clip that works
+/// here proves the live path works.
+if let filePath = value(after: "--file", in: arguments), replayThroughTheLivePipe {
     let url = URL(fileURLWithPath: filePath)
     let recording: [AudioFrame]
     do {

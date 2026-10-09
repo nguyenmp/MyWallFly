@@ -2,7 +2,7 @@
 
 A fly on the wall for your meetings. It listens to the microphone and to system audio, transcribes speech live, labels who spoke when, and streams the result to a web page.
 
-**Status: capture works, the transcript comes back from Speechmatics with speaker labels, and a run shows it live in a browser page. Nothing is stored in a database yet, and no audio is read back for the end-of-meeting pass.** Everything below is a decision, a reason, or an open question.
+**Status: capture works, the transcript comes back from Speechmatics with speaker labels, and a run shows it live in a browser page. The batch client works: a clip uploaded, transcribed, and labelled, in a few seconds. Nothing is stored in a database, and the live speaker labels are not replaced by the batch result yet.** Everything below is a decision, a reason, or an open question.
 
 ## Try it now
 
@@ -37,7 +37,8 @@ swift run wallfly-transcribe --check         # open a stream and stop: tests the
 swift run wallfly-transcribe                 # listen until you press Ctrl-C
 swift run wallfly-transcribe 60              # stop by itself after 60 seconds
 swift run wallfly-transcribe mic-only        # microphone only, one stream
-swift run wallfly-transcribe --file clip.wav # replay a recording, no microphone needed
+swift run wallfly-transcribe --file clip.wav # transcribe a recording, no microphone needed
+swift run wallfly-transcribe --file clip.wav --replay # play it through the live pipe instead
 swift run wallfly-transcribe --out runs/monday # write into that folder instead
 swift run wallfly-transcribe --final-only    # do not follow the words being spoken
 swift run wallfly-transcribe 60 --verbose    # also log every message from the service
@@ -58,6 +59,35 @@ The line being written sits at the bottom and grows as the service settles it. T
 Press Ctrl-C to stop. It stops in about a third of a second, flushes the last words, and prints the totals. Give it a number if you would rather it stop on its own.
 
 `--partials` adds the words in progress when the output is not a terminal, for example in a log.
+
+### Transcribe a recording
+
+A file is already recorded, so there is nothing to wait for. `--file` uploads the whole thing to the batch service and prints the transcript when it lands. The provider works at its own speed, so a recording comes back far sooner than it takes to play. A 74 second clip came back in about 9 seconds.
+
+```sh
+swift run wallfly-transcribe --file runs/monday/mic.wav
+```
+
+The run prints the job id the service gave back, the status while it waits, then one line per speaker. Those lines go into `transcript.txt` and onto the page, so a batch run leaves behind the same files as a live one.
+
+`--replay` keeps the old behaviour: the file is pushed through the live pipe at the pace it was recorded. That is the only way to check the live path without a microphone, so keep it for that.
+
+A batch transcript carries no pause marks. One speaker who talks for five minutes would come back as a single line, so the client starts a new line at every speaker change and at any pause longer than two seconds. The live path merges turns across a three second silence; the two paths split lines at slightly different places.
+
+Measured on this machine:
+
+- A 74 second recording came back in about 9 seconds. A 10.6 second one took 4 to 5 seconds, and most of that is the poll, which asks the service to hold each status request for up to 5 seconds.
+- The upload works, the job status works, and the words come back with speaker labels and word times.
+- The rule that starts a new line at a 2 second pause held: the 1.5 second pauses in that recording did not split lines.
+- Two voices made by the system's own speech tool both came back as `S1`. That says nothing about a real room: synthetic voices are not a fair test of diarization, so check this again on a real meeting.
+
+What the service taught us, all three now written into the code:
+
+- The batch settings refuse `max_speakers`: "Additional property max_speakers is not allowed". The real-time settings accept it. The batch settings take `prefer_current_speaker` only.
+- The transcript format must be asked for as `json-v2`. Plain `json` comes back as "format in query should be one of [json-v2 txt srt]".
+- Both `GET` calls take a `wait` parameter, so one request can cover several seconds of waiting instead of polling every second.
+
+The Europe host is proven by those runs. The United States host answers, but this key was refused there with a 401, because a key belongs to one region. Check it with a United States key before you rely on it. The offline tests live in `Tests/WallFlyTranscribeTests/BatchClientTests.swift`.
 
 ### The transcript page
 
@@ -80,7 +110,13 @@ Every run makes a folder named after the moment it started:
 
 The name is the run's start time in UTC, so two runs never land on top of each other. The run prints the folder and each path at the start, and each file again at the end with its length.
 
-The audio is kept because the second pass at the end of a meeting needs it: the tighter batch result replaces the live speaker labels. Delete the folder once that pass is done.
+The audio is kept because the second pass at the end of a meeting needs it: the tighter batch result replaces the live speaker labels. Point the batch run at the saved track, and delete the folder once that pass is done:
+
+```sh
+swift run wallfly-transcribe --file runs/monday/mic.wav
+```
+
+The two tracks are kept apart, so a batch run reads one of them at a time. Mixing them into one file first would let the batch pass diarize the whole room at once.
 
 Buffers go straight to disk as they arrive, so a long meeting never sits in memory.
 
@@ -308,7 +344,8 @@ The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one rea
 
 What is proven:
 
-- 48 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, the rules that join words into lines, and the WAV writer.
+- A 74 second recording went to the batch service and came back in about 9 seconds, with speaker labels and word times.
+- 76 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, the rules that join words into lines, the WAV writer, and the batch upload body.
 - A bad key comes back as "Not Authorized" in about a second, not as a hang.
 - Two voices replayed through the provider came back as two lines, labelled S1 and S2, with the words right.
 - A live run on both tracks reaches the provider and ends cleanly: 1841 buffers, none dropped. Ctrl-C stops it in about a third of a second and the last words still arrive.
@@ -317,14 +354,14 @@ What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
 - The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
-- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `wallfly-open`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, but nothing reads the saved audio back: the second pass that replaces the live speaker labels with the tighter batch result is not written.
+- The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `wallfly-open`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, and `wallfly-transcribe --file …` reads a saved track back. What is still missing is the step that takes the batch result and puts it in place of the live labels: today the batch run prints its own transcript, and nothing merges the two.
 
 ## Next step
 
 1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer. That answers two open questions at once: does a long run drift, and does the transcript match the room.
 2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
 3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
-4. Send the saved audio through the batch pass and replace the live speaker labels with the result. Delete the folder once that lands.
+4. Run `wallfly-transcribe --file …` on a saved track, and compare its words, speaker count, and cost with the live pass. Then write the step that puts the batch labels in place of the live ones. Delete the folder once that lands.
 5. Store the transcript in SQLite, and save the changes made on the page.
 
 The spike has been deleted. Its settings and its permission code now live in the helper, so they exist in one place only. Never keep two copies of that code: they drift apart and you fix the same bug twice.
@@ -346,6 +383,9 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **The end message must name the last audio chunk.** Bare `{"message":"EndOfStream"}` is rejected by the service schema, and the service then drops the words it was still holding: every meeting loses its last few seconds. The reply is easy to miss, because the words simply never arrive. Send `last_seq_no`, the count of audio frames sent, which the service echoes in every `AudioAdded`.
 - **A final transcript message is not a whole line.** The service commits a final every second or two, so one sentence arrives as several of them. Settling each one at once names a new speaker and puts them on the clock early, and folding neighbours back together keeps one line per turn. Waiting for `EndOfUtterance` instead made a new speaker wait for someone else to speak before they could be named.
 - **Wait for `EndOfTranscript`, not for the socket to close.** The service sends everything it has, then keeps the socket open. Waiting for the close made Ctrl-C take five seconds instead of a third of one. Treat `EndOfTranscript` as the end of the meeting.
+- **The batch settings are not the real-time settings.** `max_speakers` is refused by the batch service with "Additional property max_speakers is not allowed", and the transcript format must be `json-v2`, not `json`. The two APIs share a name and little else. Check a settings key against the batch service before you trust it.
+- **A batch transcript has no pause marks.** A turn ends only where the word times leave a gap, so one speaker who talks for five minutes arrives as one long run of words. Split on the gaps yourself, or the line runs off the page.
+- **The batch API is a different host from the real-time one.** The real-time address (`eu2.rt.speechmatics.com`) only serves live streams. Sending a file there is not a slow job; it is the wrong endpoint. `asr.api.speechmatics.com` works for Europe; a key is tied to one region, so a United States key is needed to prove `us2.asr.api.speechmatics.com`.
 - **A Command Line Tools install can fail to load the swift-testing macros.** With no full Xcode, `swift test` sometimes stopped with "plugin for module 'TestingMacros' not found". That is a toolchain problem, not a test failure, and it hit about a third of runs. `Package.swift` now points the compiler straight at the plugin directory, which fixed it. If it comes back, check that the directory still exists.
 
 ## Considered, not using

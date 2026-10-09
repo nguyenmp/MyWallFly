@@ -9,6 +9,11 @@ public struct TranscriptionEvent: Sendable {
     /// share this timeline because the pipe pads each stream with silence up to
     /// that track's offset.
     public let segment: TranscriptSegment
+
+    public init(track: AudioTrack, segment: TranscriptSegment) {
+        self.track = track
+        self.segment = segment
+    }
 }
 
 /// Joins the capture helper to Speechmatics.
