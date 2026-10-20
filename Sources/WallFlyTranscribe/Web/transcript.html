@@ -209,6 +209,10 @@ window.WALLFLY_DATA = {
 var TRACKS = ['mic','system'];
 var TRACKLABEL = {mic:'mic', system:'system'};
 
+// How long a silence between two pieces may last and still keep one speaker's
+// words on one line. This is the same number the printer uses.
+var LINE_GAP_MS = 20000;
+
 var DATA = window.WALLFLY_DATA || { turns: [], open: null, edits: null };
 // Set when a run serves this page and streams the transcript to it. Without it
 // the page is a mockup reading sample data from the file.
@@ -453,7 +457,7 @@ function pieces(){
     var last = merged[merged.length-1];
     if (last && last.track===p.track
         && identity(p.track, last.label)===identity(p.track, p.label)
-        && p.t0 - last.t1 < 200){
+        && p.t0 - last.t1 < LINE_GAP_MS){
       last.t1 = p.t1;
       last.words = last.words.concat(p.words);
       last.edited = last.edited || p.edited;

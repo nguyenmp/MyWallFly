@@ -534,7 +534,7 @@ final class SegmentPrinter: @unchecked Sendable {
     private var lastEnd: Double = 0
     /// How long a silence between two pieces may last and still keep one
     /// speaker's words on the same line. A longer gap starts a new line.
-    private static let silenceGapTolerance: Double = 3
+    private static let silenceGapTolerance: Double = 20
     /// The words still being spoken, shown after the settled ones.
     private var draft: String?
 
