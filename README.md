@@ -337,6 +337,7 @@ What the spike and the helper found on real hardware:
 
 - Both tracks work. The mic arrives at 16 kHz mono 16-bit, the format we want, with no conversion.
 - System audio arrives at 48 kHz stereo, 32-bit float, one array per channel. It needs a mix down to mono and a drop to 16 kHz.
+- The drop to 16 kHz needs one converter kept for the whole meeting, not a new one per buffer. A fresh converter has no memory of the audio before it, so it throws away the tail of every buffer: 960 frames became 314 samples instead of 320, which loses 1.9% of the audio and slides every timestamp by the same amount. See the trap below.
 - The two tracks run on different clocks. Pick one clock — the host clock — and line both tracks up on it. Measure each track's offset at the start of every meeting, because it changes from run to run. We measured 80 to 90 ms between the two tracks on every run.
 - A buffer's arrival time is late by about one buffer, and the two tracks use different buffer sizes. So the offset is only good to about 20 ms. That is close enough to tell who spoke.
 
@@ -345,7 +346,7 @@ The pipe to Speechmatics is now built. `Sources/WallFlyTranscribe` opens one rea
 What is proven:
 
 - A 74 second recording went to the batch service and came back in about 9 seconds, with speaker labels and word times.
-- 76 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, the rules that join words into lines, the WAV writer, and the batch upload body.
+- 79 tests pass with no key and no network. They cover the `.env` reader, the start and end messages, every message the service sends back, the rules that join words into lines, the WAV writer, the batch upload body, and the drop from 48 kHz to 16 kHz.
 - A bad key comes back as "Not Authorized" in about a second, not as a hang.
 - Two voices replayed through the provider came back as two lines, labelled S1 and S2, with the words right.
 - A live run on both tracks reaches the provider and ends cleanly: 1841 buffers, none dropped. Ctrl-C stops it in about a third of a second and the last words still arrive.
@@ -353,12 +354,12 @@ What is proven:
 What is not:
 
 - No real meeting has been run. That needs the microphone and Screen Recording approvals. They are granted on this machine now, and a live run does open both tracks, but a silent room proves nothing about accuracy.
-- The per-minute cost and the long-run drift are still unmeasured. The twelve second run showed 32 ms of drift on the system track, which says nothing at that length.
+- The per-minute cost is still unmeasured. Drift is measured now, and it found a bug: the system track on the sixteen minute run of 2026-10-20 was 18.5 seconds short of the microphone, because the resampler lost 1.9% of the audio. `TrackStats.drift` compares the audio delivered against the wall clock, so a repeat of that shows up while the meeting runs.
 - The page shows the transcript live, and the changes made on the page are kept beside the transcript in the run's folder (`edits.json`), so a reload or a crash does not lose them. A saved meeting can be opened again with `wallfly-open`, changes and all. Nothing is in a database yet. A run keeps the transcript and the audio on disk, and `wallfly-transcribe --file …` reads a saved track back. What is still missing is the step that takes the batch result and puts it in place of the live labels: today the batch run prints its own transcript, and nothing merges the two.
 
 ## Next step
 
-1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer. That answers two open questions at once: does a long run drift, and does the transcript match the room.
+1. Run `wallfly-transcribe` on a real meeting, ten minutes or longer, and watch `drift` on both tracks. Have two people talk in turns and check that the turns do not overlap. That says whether the drop to 16 kHz is fixed and whether the transcript matches the room.
 2. Confirm the speaker count against the room you remember, and note what Speechmatics costs per minute.
 3. Add voice detection before the provider. Every frame is sent today, silence included, and decision 3 says to skip silence because we pay per minute.
 4. Run `wallfly-transcribe --file …` on a saved track, and compare its words, speaker count, and cost with the live pass. Then write the step that puts the batch labels in place of the live ones. Delete the folder once that lands.
@@ -373,6 +374,7 @@ The spike has been deleted. Its settings and its permission code now live in the
 - **ScreenCaptureKit has no audio-only mode.** A small video stream always runs next to the audio. Set it to 2x2 pixels at one frame per second, and throw the frames away.
 - **macOS permissions.** System audio needs Screen Recording approval, and the microphone needs its own. Someone must click each prompt once; there is no way to grant them from a script. Check the permission live rather than from a saved flag, because a user can revoke it at any time.
 - **The two tracks do not line up.** They start at different moments and drift apart. Keep both on one clock and record each offset, or the speaker labels land on the wrong words.
+- **A fresh audio converter loses the tail of every buffer.** `AVAudioConverter` drops the end of each buffer to fill its filter, so building one per buffer throws away samples. System audio arrives in 960-frame buffers at 48 kHz, and a fresh converter turned each into 314 samples instead of 320: the track ran 1.9% fast, the pitch came out 1.9% high, and every timestamp from the provider slid earlier by the same 1.9%. Over sixteen minutes that was 18.5 seconds, enough to make two people taking turns look like they talked over each other. Build one converter per input rate and keep it for the whole meeting. `Tests/WallFlyCaptureTests/ResampleTests.swift` fails if that ever goes back.
 - **ScreenCaptureKit caps system audio at 48 kHz.**
 - **Audio with DRM protection comes through silent.** Expect a bug report about it.
 - **Provider sockets drop.** Decide up front whether to buffer to disk or drop the audio. A memory buffer that keeps growing breaks the "stay light" goal.
