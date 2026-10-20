@@ -18,7 +18,6 @@ final class SystemAudioTrack: NSObject {
     private var stream: SCStream?
 
     private var firstHost: Double?
-    private var firstPresentationTime: Double?
     private var driftSeconds: Double = 0
     private var frameCount = 0
     private var deliveredSeconds: Double = 0
@@ -140,7 +139,6 @@ extension SystemAudioTrack: SCStreamOutput {
         }
 
         let host = CACurrentMediaTime()
-        let presentationTime = CMSampleBufferGetPresentationTimeStamp(buffer).seconds
 
         let frame: AudioFrame
         do {
@@ -158,13 +156,13 @@ extension SystemAudioTrack: SCStreamOutput {
         lock.lock()
         if firstHost == nil {
             firstHost = host
-            firstPresentationTime = presentationTime
         }
         frameCount += 1
         deliveredSeconds += frame.seconds
-        let hostElapsed = host - (firstHost ?? host)
-        let deviceElapsed = presentationTime - (firstPresentationTime ?? presentationTime)
-        driftSeconds = hostElapsed - deviceElapsed
+        // Audio delivered against the wall clock. This track is the one that
+        // gets resampled, so it is the one most likely to lose samples quietly.
+        // Growing drift here is that loss, and it slides every timestamp.
+        driftSeconds = (host - (firstHost ?? host)) - deliveredSeconds
         lock.unlock()
 
         onFrame?(frame)

@@ -75,8 +75,11 @@ public struct TrackStats: Sendable {
     public let frames: Int
     /// Seconds of audio delivered so far.
     public let seconds: Double
-    /// Host clock minus this track's own clock, in seconds. If this grows over a
-    /// long meeting, the two tracks will not line up on their own.
+    /// Seconds of audio delivered, taken away from the seconds the host clock
+    /// says have passed. A track that quietly loses samples shows up here, and
+    /// that is what stops the two tracks lining up. The device's own buffer
+    /// timestamps do not show it: they are stamped per buffer and stay in step
+    /// even while audio goes missing.
     public let drift: Double
     /// Buffers we could not convert or keep. Anything above zero means a hole in
     /// the transcript.

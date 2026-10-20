@@ -12,6 +12,12 @@ final class PCMNormalizer {
     private let reportLock = NSLock()
     private var reportedFormats: Set<String> = []
 
+    /// One converter per input rate, kept for the whole meeting, and the lock
+    /// that stops two tracks sharing one. See `converter(for:)` for why keeping
+    /// them matters.
+    private let converterLock = NSLock()
+    private var converters: [Double: AVAudioConverter] = [:]
+
     /// Set this to see what each track really sends. Leave it nil in the app.
     var debugSink: ((String) -> Void)?
 
@@ -210,31 +216,39 @@ final class PCMNormalizer {
 
     /// Resamples mono floats down to 16 kHz and packs them as 16-bit PCM.
     /// Only the rate changes here. Mixing to mono happened before this.
-    private func resample(_ samples: [Float], from inputRate: Double) throws -> Data {
+    ///
+    /// The converter is kept from one buffer to the next. A fresh converter has
+    /// no memory of the audio before it and drops the tail of every buffer, so
+    /// keeping one is what stops a track from slowly losing samples. See
+    /// `converter(for:)`.
+    func resample(_ samples: [Float], from inputRate: Double) throws -> Data {
         guard !samples.isEmpty else { return Data() }
         guard inputRate != CaptureFormat.sampleRate else {
             return pack(samples)
         }
-        guard let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                              sampleRate: inputRate,
-                                              channels: 1,
-                                              interleaved: false),
-              let input = AVAudioPCMBuffer(pcmFormat: inputFormat,
-                                           frameCapacity: AVAudioFrameCount(samples.count)) else {
+
+        // One converter cannot run twice at once, and both tracks share this
+        // normalizer.
+        converterLock.lock()
+        defer { converterLock.unlock() }
+
+        let converter = try converter(for: inputRate)
+        guard let input = AVAudioPCMBuffer(pcmFormat: converter.inputFormat,
+                                          frameCapacity: AVAudioFrameCount(samples.count)) else {
             throw CaptureError.unsupportedAudioFormat("could not build a mono buffer at \(inputRate) Hz")
         }
         input.frameLength = AVAudioFrameCount(samples.count)
-        if let channel = input.floatChannelData?[0] {
-            samples.withUnsafeBufferPointer { source in
-                channel.update(from: source.baseAddress!, count: samples.count)
-            }
+        guard let source = input.floatChannelData?[0] else {
+            throw CaptureError.unsupportedAudioFormat("could not write \(samples.count) frames at \(inputRate) Hz")
+        }
+        samples.withUnsafeBufferPointer { samples in
+            source.update(from: samples.baseAddress!, count: samples.count)
         }
 
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            throw CaptureError.unsupportedAudioFormat("could not convert \(inputRate) Hz to \(CaptureFormat.sampleRate) Hz")
-        }
+        // Room for this buffer plus whatever the converter carried over from the
+        // last one, so a carried-over tail never has to be split across calls.
         let ratio = CaptureFormat.sampleRate / inputRate
-        let capacity = AVAudioFrameCount(Double(samples.count) * ratio) + 64
+        let capacity = AVAudioFrameCount(Double(samples.count) * ratio) + 4_096
         guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
             throw CaptureError.unsupportedAudioFormat("could not hold the converted audio")
         }
@@ -243,6 +257,8 @@ final class PCMNormalizer {
         var conversionError: NSError?
         converter.convert(to: output, error: &conversionError) { _, status in
             if handedOver {
+                // The converter keeps the frames it cannot use yet and hands them
+                // back with the next buffer. That is the whole point of keeping it.
                 status.pointee = .noDataNow
                 return nil
             }
@@ -257,6 +273,33 @@ final class PCMNormalizer {
             throw CaptureError.unsupportedAudioFormat("conversion produced no audio")
         }
         return Data(bytes: channel, count: Int(output.frameLength) * CaptureFormat.bytesPerSample)
+    }
+
+    /// The converter for one input rate, made on first use and kept after that.
+    ///
+    /// A brand-new converter has no memory of the audio before it, so it drops
+    /// the tail of every buffer to fill its filter. System audio arrives in
+    /// 960-frame buffers at 48 kHz, and a fresh converter turns each one into
+    /// 314 samples instead of 320: 1.9% of the audio thrown away, and every
+    /// timestamp the provider reports slides earlier to match. Over a sixteen
+    /// minute meeting that is eighteen seconds, which is enough to make two
+    /// people who took turns look like they talked over each other.
+    ///
+    /// Keeping one converter per rate carries its state from buffer to buffer,
+    /// and the sample count comes out of 960 frames as 320.
+    ///
+    /// The caller must hold `converterLock`.
+    private func converter(for inputRate: Double) throws -> AVAudioConverter {
+        if let existing = converters[inputRate] { return existing }
+        guard let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                              sampleRate: inputRate,
+                                              channels: 1,
+                                              interleaved: false),
+              let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+            throw CaptureError.unsupportedAudioFormat("could not convert \(inputRate) Hz to \(CaptureFormat.sampleRate) Hz")
+        }
+        converters[inputRate] = converter
+        return converter
     }
 
     /// Packs mono floats as 16-bit PCM when the rate already matches.

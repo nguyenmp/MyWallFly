@@ -17,7 +17,6 @@ final class MicrophoneTrack: NSObject {
     private let lock = NSLock()
 
     private var firstHost: Double?
-    private var firstPresentationTime: Double?
     private var driftSeconds: Double = 0
     private var frameCount = 0
     private var deliveredSeconds: Double = 0
@@ -92,7 +91,6 @@ extension MicrophoneTrack: AVCaptureAudioDataOutputSampleBufferDelegate {
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         let host = CACurrentMediaTime()
-        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
 
         let frame: AudioFrame
         do {
@@ -112,15 +110,14 @@ extension MicrophoneTrack: AVCaptureAudioDataOutputSampleBufferDelegate {
         lock.lock()
         if firstHost == nil {
             firstHost = host
-            firstPresentationTime = presentationTime
         }
         frameCount += 1
         deliveredSeconds += frame.seconds
-        // Host clock moved this far; the device's own clock moved that far. The
-        // difference is drift, and it is why the two tracks need one shared clock.
-        let hostElapsed = host - (firstHost ?? host)
-        let deviceElapsed = presentationTime - (firstPresentationTime ?? presentationTime)
-        driftSeconds = hostElapsed - deviceElapsed
+        // Audio delivered against the wall clock. A track losing samples reads
+        // as growing drift here, which is the number the two tracks lining up
+        // depends on. The device's own buffer timestamps stay in step even while
+        // audio goes missing, so they cannot be used for this.
+        driftSeconds = (host - (firstHost ?? host)) - deliveredSeconds
         lock.unlock()
 
         onFrame?(frame)
