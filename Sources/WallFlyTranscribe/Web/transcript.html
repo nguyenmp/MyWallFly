@@ -302,10 +302,27 @@ function firstSight(track, label){
 function refOf(track, label){
   return {track:track, label:label, anchor:firstSight(track,label)};
 }
+// The label a saved anchor points at now. An anchor is the moment a voice first
+// spoke, which is the start of a turn on its track, so look for the turn that
+// starts there. Asking which turn contains that instant gives the wrong answer
+// when two turns on one track overlap by a few tens of milliseconds, and a name
+// then lands on the other voice. A turn still carrying the saved label wins.
+function labelAtAnchor(track, t, label){
+  var other = null;
+  for (var i=0;i<turns.length;i++){
+    var x = turns[i];
+    if (x.track!==track || x.t0!==t) continue;
+    if (x.label===label) return x.label;
+    if (other===null) other = x.label;
+  }
+  // Nothing starts there, such as when the turns were rebuilt: fall back to the
+  // turn that contains the instant.
+  return other || labelAt(track, t);
+}
 function resolveRef(r){
   if (!r) return null;
   if (r.anchor===null || r.anchor===undefined) return r.label;
-  return labelAt(r.track, r.anchor) || r.label;
+  return labelAtAnchor(r.track, r.anchor, r.label) || r.label;
 }
 function identity(track, label){
   var cur = label, guard = 0;
